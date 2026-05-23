@@ -1,0 +1,89 @@
+version: "3.9"
+services:
+  api:
+    build:
+      context: ./APP/api
+      dockerfile: ../../Dockerfile
+    ports:
+      - "3333:3333"
+    environment:
+      - DATABASE_URL=postgresql://axiom:axiom123@db:5432/axiomdb
+      - REDIS_URL=redis://redis:6379
+      - MINIO_URL=http://minio:9000
+    depends_on:
+      - db
+      - redis
+      - minio
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: axiom
+      POSTGRES_PASSWORD: axiom123
+      POSTGRES_DB: axiomdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: admin123
+    command: server /data
+    volumes:
+      - minio_data:/data
+  worker-vision:
+    build:
+      context: ./APP/workers
+      dockerfile: ../../Dockerfile.worker
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+  worker-mechanical:
+    build:
+      context: ./APP/workers
+      dockerfile: ../../Dockerfile.worker
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+  worker-labor:
+    build:
+      context: ./APP/workers
+      dockerfile: ../../Dockerfile.worker
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+  worker-logistics:
+    build:
+      context: ./APP/workers
+      dockerfile: ../../Dockerfile.worker
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/observability/prometheus.yml:/etc/prometheus/prometheus.yml
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+volumes:
+  postgres_data:
+  minio_data:
