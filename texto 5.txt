@@ -1,0 +1,553 @@
+"""
+AXIOM Stress Test Suite
+High-concurrency asyncio + httpx mass-injection pipeline.
+
+Tests:
+  - 50+ simultaneous requests across all 7 service endpoints
+  - Celery queue saturation validation
+  - Rate-limit trigger detection
+  - Response time percentile analysis (p50, p95, p99)
+  - Error rate and retry behaviour under load
+
+Usage:
+    python -m pytest tests/stress_test.py -v -s
+    # or run directly:
+    python tests/stress_test.py
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import statistics
+import time
+import uuid
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
+
+import httpx
+import pytest
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+BASE_URL          = os.getenv("AXIOM_BASE_URL", "http://localhost:8000")
+TEST_API_KEY      = os.getenv("AXIOM_TEST_API_KEY", "test-api-key-dev")
+CONCURRENCY       = int(os.getenv("STRESS_CONCURRENCY", "50"))
+REQUESTS_PER_SILO = int(os.getenv("REQUESTS_PER_SILO", "10"))   # per endpoint
+TIMEOUT_SECS      = float(os.getenv("STRESS_TIMEOUT", "30.0"))
+
+# Acceptable thresholds
+MAX_ERROR_RATE_PCT      = 5.0    # fail if >5% of requests error
+MAX_P95_LATENCY_MS      = 8000   # fail if p95 latency > 8 s
+RATE_LIMIT_STATUS       = 429
+EXPECTED_RATE_LIMIT_PCT = 0.0    # set > 0 if rate limiting is intentionally enabled
+
+
+# ---------------------------------------------------------------------------
+# Shared HTTP client factory
+# ---------------------------------------------------------------------------
+
+def make_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        base_url=BASE_URL,
+        headers={
+            "Authorization": f"Bearer {TEST_API_KEY}",
+            "Content-Type":  "application/json",
+            "X-Request-ID":  str(uuid.uuid4()),
+        },
+        timeout=httpx.Timeout(TIMEOUT_SECS),
+        limits=httpx.Limits(max_connections=200, max_keepalive_connections=100),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Result tracking
+# ---------------------------------------------------------------------------
+
+class ResultKind(str, Enum):
+    SUCCESS      = "success"
+    CLIENT_ERROR = "client_error"   # 4xx (non-429)
+    RATE_LIMITED = "rate_limited"   # 429
+    SERVER_ERROR = "server_error"   # 5xx
+    TIMEOUT      = "timeout"
+    EXCEPTION    = "exception"
+
+
+@dataclass
+class RequestResult:
+    endpoint:        str
+    status_code:     int | None
+    latency_ms:      float
+    kind:            ResultKind
+    error_detail:    str | None = None
+    response_body:   dict[str, Any] | None = None
+
+
+@dataclass
+class StressReport:
+    total_requests:   int            = 0
+    results:          list[RequestResult] = field(default_factory=list)
+
+    def add(self, r: RequestResult) -> None:
+        self.results.append(r)
+        self.total_requests += 1
+
+    # ---- aggregations ----
+
+    @property
+    def success_count(self) -> int:
+        return sum(1 for r in self.results if r.kind == ResultKind.SUCCESS)
+
+    @property
+    def error_count(self) -> int:
+        return sum(1 for r in self.results if r.kind not in (ResultKind.SUCCESS, ResultKind.RATE_LIMITED))
+
+    @property
+    def rate_limited_count(self) -> int:
+        return sum(1 for r in self.results if r.kind == ResultKind.RATE_LIMITED)
+
+    @property
+    def error_rate_pct(self) -> float:
+        if self.total_requests == 0:
+            return 0.0
+        return self.error_count / self.total_requests * 100
+
+    @property
+    def rate_limit_pct(self) -> float:
+        if self.total_requests == 0:
+            return 0.0
+        return self.rate_limited_count / self.total_requests * 100
+
+    def latency_percentile(self, pct: float) -> float:
+        """Return the Nth percentile latency in milliseconds."""
+        latencies = [r.latency_ms for r in self.results]
+        if not latencies:
+            return 0.0
+        sorted_lat = sorted(latencies)
+        idx = int(len(sorted_lat) * pct / 100)
+        return sorted_lat[min(idx, len(sorted_lat) - 1)]
+
+    def by_endpoint(self) -> dict[str, list[RequestResult]]:
+        out: dict[str, list[RequestResult]] = {}
+        for r in self.results:
+            out.setdefault(r.endpoint, []).append(r)
+        return out
+
+    def print_summary(self) -> None:
+        print("\n" + "=" * 70)
+        print("AXIOM STRESS TEST — SUMMARY")
+        print("=" * 70)
+        print(f"  Total requests  : {self.total_requests}")
+        print(f"  Successes       : {self.success_count} ({100 - self.error_rate_pct:.1f}%)")
+        print(f"  Errors          : {self.error_count}  ({self.error_rate_pct:.1f}%)")
+        print(f"  Rate-limited    : {self.rate_limited_count}  ({self.rate_limit_pct:.1f}%)")
+        print(f"  Latency p50     : {self.latency_percentile(50):.0f} ms")
+        print(f"  Latency p95     : {self.latency_percentile(95):.0f} ms")
+        print(f"  Latency p99     : {self.latency_percentile(99):.0f} ms")
+
+        print("\n  By endpoint:")
+        for endpoint, res_list in sorted(self.by_endpoint().items()):
+            successes = sum(1 for r in res_list if r.kind == ResultKind.SUCCESS)
+            lats = [r.latency_ms for r in res_list]
+            avg  = statistics.mean(lats) if lats else 0
+            print(f"    {endpoint:<40} {successes}/{len(res_list)} ok  avg={avg:.0f}ms")
+
+        print("=" * 70 + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Individual request helpers
+# ---------------------------------------------------------------------------
+
+async def fire_request(
+    client: httpx.AsyncClient,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None,
+    semaphore: asyncio.Semaphore,
+    report: StressReport,
+) -> None:
+    """Send a single request under the semaphore, record result."""
+    async with semaphore:
+        t0 = time.perf_counter()
+        status: int | None = None
+        body: dict[str, Any] | None = None
+        error_detail: str | None = None
+        kind: ResultKind
+
+        try:
+            if method.upper() == "POST":
+                resp = await client.post(path, json=payload)
+            elif method.upper() == "GET":
+                resp = await client.get(path, params=payload)
+            else:
+                resp = await client.request(method, path, json=payload)
+
+            status = resp.status_code
+            try:
+                body = resp.json()
+            except Exception:
+                body = {"raw": resp.text[:200]}
+
+            if status < 400:
+                kind = ResultKind.SUCCESS
+            elif status == 429:
+                kind = ResultKind.RATE_LIMITED
+                error_detail = "Rate limited"
+            elif status < 500:
+                kind = ResultKind.CLIENT_ERROR
+                error_detail = f"HTTP {status}"
+            else:
+                kind = ResultKind.SERVER_ERROR
+                error_detail = f"HTTP {status}: {body}"
+
+        except httpx.TimeoutException as exc:
+            kind = ResultKind.TIMEOUT
+            error_detail = str(exc)
+        except Exception as exc:
+            kind = ResultKind.EXCEPTION
+            error_detail = str(exc)
+
+        latency_ms = (time.perf_counter() - t0) * 1000
+        report.add(RequestResult(
+            endpoint=path,
+            status_code=status,
+            latency_ms=latency_ms,
+            kind=kind,
+            error_detail=error_detail,
+            response_body=body,
+        ))
+
+
+# ---------------------------------------------------------------------------
+# Scenario builders — one per office
+# ---------------------------------------------------------------------------
+
+def _shop_id() -> str:
+    return str(uuid.uuid4())
+
+
+def estimate_payloads(n: int) -> list[tuple[str, str, dict[str, Any]]]:
+    return [
+        ("POST", "/api/v1/jobs/estimate", {
+            "shop_id":    _shop_id(),
+            "vehicle_id": str(uuid.uuid4()),
+            "image_urls": [f"https://cdn.example.com/img/{uuid.uuid4()}.jpg"],
+        })
+        for _ in range(n)
+    ]
+
+
+def claims_payloads(n: int) -> list[tuple[str, str, dict[str, Any]]]:
+    carriers = ["ALLSTATE", "STATE_FARM", "GEICO", "PROGRESSIVE", "USAA"]
+    return [
+        ("POST", "/api/v1/jobs/claims", {
+            "shop_id":     _shop_id(),
+            "vehicle_id":  str(uuid.uuid4()),
+            "carrier_code": carriers[i % len(carriers)],
+            "claim_number": f"CLM-{uuid.uuid4().hex[:10].upper()}",
+        })
+        for i in range(n)
+    ]
+
+
+def total_loss_payloads(n: int) -> list[tuple[str, str, dict[str, Any]]]:
+    return [
+        ("POST", "/api/v1/jobs/total_loss", {
+            "shop_id":    _shop_id(),
+            "vehicle_id": str(uuid.uuid4()),
+            "vin":        f"1HGCM82633A{i:06d}"[:17],
+            "repair_cost": round(4500 + i * 137.5, 2),
+        })
+        for i in range(n)
+    ]
+
+
+def lien_payloads(n: int) -> list[tuple[str, str, dict[str, Any]]]:
+    return [
+        ("POST", "/api/v1/jobs/lien", {
+            "shop_id":          _shop_id(),
+            "vehicle_id":       str(uuid.uuid4()),
+            "vin":              f"2T1BURHE0JC{i:06d}"[:17],
+            "amount_owed":      round(1200 + i * 50.0, 2),
+            "services_rendered": f"Engine rebuild, differential repair — invoice #{i}",
+            "service_date_start": "2025-01-10",
+            "service_date_end":   "2025-02-14",
+            "debtor_name":      f"Test Debtor {i}",
+            "debtor_address":   f"{i * 3} NW 7th Ave",
+            "debtor_city":      "Miami",
+            "debtor_state":     "FL",
+            "debtor_zip":       "33127",
+        })
+        for i in range(n)
+    ]
+
+
+def audit_payloads(n: int) -> list[tuple[str, str, dict[str, Any]]]:
+    return [
+        ("POST", "/api/v1/jobs/audit", {
+            "shop_id":    _shop_id(),
+            "vehicle_id": str(uuid.uuid4()),
+            "invoice_url": f"https://invoices.example.com/{uuid.uuid4()}.pdf",
+        })
+        for _ in range(n)
+    ]
+
+
+def cpo_payloads(n: int) -> list[tuple[str, str, dict[str, Any]]]:
+    manufacturers = ["BMW", "TOYOTA", "HONDA", "FORD", "CHEVY"]
+    return [
+        ("POST", "/api/v1/jobs/cpo", {
+            "shop_id":      _shop_id(),
+            "vehicle_id":   str(uuid.uuid4()),
+            "manufacturer": manufacturers[i % len(manufacturers)],
+            "obd_data":     {"dtc_codes": [], "vin_confirmed": True},
+        })
+        for i in range(n)
+    ]
+
+
+def health_payloads(n: int) -> list[tuple[str, str, dict[str, Any]]]:
+    """Health-check endpoint — validates API responsiveness under concurrent load."""
+    return [("GET", "/health", {}) for _ in range(n)]
+
+
+def shop_list_payloads(n: int) -> list[tuple[str, str, dict[str, Any]]]:
+    """List shops — exercises DB query path under load."""
+    return [("GET", "/api/v1/shops", {"page": 1, "page_size": 20}) for _ in range(n)]
+
+
+# ---------------------------------------------------------------------------
+# Core blast function
+# ---------------------------------------------------------------------------
+
+async def blast(
+    payloads: list[tuple[str, str, dict[str, Any]]],
+    semaphore: asyncio.Semaphore,
+    report: StressReport,
+    client: httpx.AsyncClient,
+) -> None:
+    """Fire all payloads concurrently (bounded by semaphore)."""
+    tasks = [
+        asyncio.create_task(
+            fire_request(client, method, path, body, semaphore, report)
+        )
+        for method, path, body in payloads
+    ]
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+# ---------------------------------------------------------------------------
+# Test scenarios
+# ---------------------------------------------------------------------------
+
+async def run_full_stress_suite() -> StressReport:
+    report = StressReport()
+    sem = asyncio.Semaphore(CONCURRENCY)
+
+    async with make_client() as client:
+        n = REQUESTS_PER_SILO
+
+        # Phase 1 — individual endpoint blasts
+        print(f"[Phase 1] Blasting each endpoint with {n} concurrent requests...")
+
+        await blast(estimate_payloads(n),    sem, report, client)
+        await blast(claims_payloads(n),      sem, report, client)
+        await blast(total_loss_payloads(n),  sem, report, client)
+        await blast(lien_payloads(n),        sem, report, client)
+        await blast(audit_payloads(n),       sem, report, client)
+        await blast(cpo_payloads(n),         sem, report, client)
+        await blast(health_payloads(n),      sem, report, client)
+        await blast(shop_list_payloads(n),   sem, report, client)
+
+        # Phase 2 — mixed simultaneous load across all endpoints
+        print(f"[Phase 2] Mixed simultaneous blast ({CONCURRENCY} concurrency)...")
+        all_mixed = (
+            estimate_payloads(5)
+            + claims_payloads(5)
+            + total_loss_payloads(5)
+            + lien_payloads(5)
+            + audit_payloads(5)
+            + cpo_payloads(5)
+            + health_payloads(5)
+            + shop_list_payloads(5)
+        )
+        await blast(all_mixed, sem, report, client)
+
+        # Phase 3 — queue saturation: fire 100 estimate jobs rapid-fire
+        print("[Phase 3] Queue saturation — 100 estimate jobs...")
+        await blast(estimate_payloads(100), asyncio.Semaphore(100), report, client)
+
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Pytest test functions
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def event_loop():
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest.fixture(scope="module")
+async def stress_report() -> StressReport:
+    return await run_full_stress_suite()
+
+
+@pytest.mark.asyncio
+async def test_api_is_reachable() -> None:
+    """Sanity check: the API must respond before the full suite runs."""
+    async with make_client() as client:
+        resp = await client.get("/health")
+    assert resp.status_code in (200, 401), (
+        f"API unreachable — got {resp.status_code}. "
+        "Is the stack running? (docker compose up --build -d)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_error_rate_within_threshold(stress_report: StressReport) -> None:
+    """Non-rate-limit errors must stay below MAX_ERROR_RATE_PCT."""
+    stress_report.print_summary()
+    assert stress_report.error_rate_pct <= MAX_ERROR_RATE_PCT, (
+        f"Error rate {stress_report.error_rate_pct:.1f}% exceeds "
+        f"threshold {MAX_ERROR_RATE_PCT}%"
+    )
+
+
+@pytest.mark.asyncio
+async def test_p95_latency(stress_report: StressReport) -> None:
+    """p95 latency must stay under MAX_P95_LATENCY_MS."""
+    p95 = stress_report.latency_percentile(95)
+    assert p95 <= MAX_P95_LATENCY_MS, (
+        f"p95 latency {p95:.0f}ms exceeds threshold {MAX_P95_LATENCY_MS}ms"
+    )
+
+
+@pytest.mark.asyncio
+async def test_rate_limiting_triggered(stress_report: StressReport) -> None:
+    """
+    If EXPECTED_RATE_LIMIT_PCT > 0, assert rate limiting is firing as configured.
+    If 0 (default), assert NO 429s are returned (rate limiting disabled in dev).
+    """
+    rate_limit_pct = stress_report.rate_limit_pct
+    if EXPECTED_RATE_LIMIT_PCT > 0:
+        assert rate_limit_pct >= EXPECTED_RATE_LIMIT_PCT, (
+            f"Expected rate limiting at ≥{EXPECTED_RATE_LIMIT_PCT}% "
+            f"but only got {rate_limit_pct:.1f}%"
+        )
+    else:
+        assert rate_limit_pct == 0.0, (
+            f"Unexpected rate limiting: {rate_limit_pct:.1f}% of requests returned 429. "
+            "Set EXPECTED_RATE_LIMIT_PCT > 0 if this is intentional."
+        )
+
+
+@pytest.mark.asyncio
+async def test_all_endpoints_reached(stress_report: StressReport) -> None:
+    """Every endpoint must have been hit at least once."""
+    expected_paths = {
+        "/api/v1/jobs/estimate",
+        "/api/v1/jobs/claims",
+        "/api/v1/jobs/total_loss",
+        "/api/v1/jobs/lien",
+        "/api/v1/jobs/audit",
+        "/api/v1/jobs/cpo",
+        "/health",
+        "/api/v1/shops",
+    }
+    hit_paths = set(stress_report.by_endpoint().keys())
+    missing = expected_paths - hit_paths
+    assert not missing, f"The following endpoints were never reached: {missing}"
+
+
+@pytest.mark.asyncio
+async def test_no_server_errors_on_health(stress_report: StressReport) -> None:
+    """Health endpoint must never return 5xx under any concurrency level."""
+    health_results = [r for r in stress_report.results if r.endpoint == "/health"]
+    server_errors = [r for r in health_results if r.kind == ResultKind.SERVER_ERROR]
+    assert not server_errors, (
+        f"{len(server_errors)} 5xx responses on /health — "
+        "the API itself is unstable under load"
+    )
+
+
+@pytest.mark.asyncio
+async def test_queue_saturation_handled(stress_report: StressReport) -> None:
+    """
+    During the 100-job queue saturation phase, the API must accept the requests
+    (202 Accepted) rather than crash. Verify by ensuring success + rate-limit
+    together account for ≥95% of the saturation-phase traffic.
+    """
+    estimate_results = [
+        r for r in stress_report.results
+        if r.endpoint == "/api/v1/jobs/estimate"
+    ]
+    acceptable = [
+        r for r in estimate_results
+        if r.kind in (ResultKind.SUCCESS, ResultKind.RATE_LIMITED)
+    ]
+    if estimate_results:
+        acceptable_pct = len(acceptable) / len(estimate_results) * 100
+        assert acceptable_pct >= 95.0, (
+            f"Only {acceptable_pct:.1f}% of estimate requests were accepted or rate-limited "
+            f"during queue saturation ({len(estimate_results)} total). "
+            "Unacceptable crash rate."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Standalone runner (no pytest)
+# ---------------------------------------------------------------------------
+
+async def _main() -> None:
+    print(f"AXIOM Stress Test starting → {BASE_URL}")
+    print(f"  Concurrency      : {CONCURRENCY}")
+    print(f"  Requests/endpoint: {REQUESTS_PER_SILO}")
+    print(f"  Timeout          : {TIMEOUT_SECS}s\n")
+
+    report = await run_full_stress_suite()
+    report.print_summary()
+
+    # Write JSON report to disk
+    report_path = "stress_report.json"
+    with open(report_path, "w") as f:
+        json.dump(
+            {
+                "total_requests": report.total_requests,
+                "error_rate_pct": report.error_rate_pct,
+                "rate_limit_pct": report.rate_limit_pct,
+                "p50_ms":  report.latency_percentile(50),
+                "p95_ms":  report.latency_percentile(95),
+                "p99_ms":  report.latency_percentile(99),
+                "by_endpoint": {
+                    ep: {
+                        "total":    len(res),
+                        "success":  sum(1 for r in res if r.kind == ResultKind.SUCCESS),
+                        "errors":   sum(1 for r in res if r.kind == ResultKind.SERVER_ERROR),
+                        "avg_ms":   statistics.mean(r.latency_ms for r in res) if res else 0,
+                    }
+                    for ep, res in report.by_endpoint().items()
+                },
+            },
+            indent=2,
+        )
+    print(f"JSON report written to {report_path}")
+
+    # Exit non-zero if thresholds breached
+    if report.error_rate_pct > MAX_ERROR_RATE_PCT:
+        raise SystemExit(f"FAIL: error rate {report.error_rate_pct:.1f}% > {MAX_ERROR_RATE_PCT}%")
+    if report.latency_percentile(95) > MAX_P95_LATENCY_MS:
+        raise SystemExit(f"FAIL: p95 {report.latency_percentile(95):.0f}ms > {MAX_P95_LATENCY_MS}ms")
+    print("All thresholds passed ✓")
+
+
+if __name__ == "__main__":
+    asyncio.run(_main())
