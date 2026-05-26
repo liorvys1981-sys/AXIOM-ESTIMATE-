@@ -1,0 +1,69 @@
+---
+# ============================================================
+# AXIOM — Secrets Template
+# DO NOT commit real values. Use sealed-secrets or external-secrets
+# to inject values at deploy time.
+#
+# To seal: kubeseal --format yaml < secrets-template.yaml > sealed-secret.yaml
+# ============================================================
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: axiom-core
+  namespace: axiom
+  annotations:
+    sealedsecrets.bitnami.com/managed: "true"
+    # Rotate every 90 days — set a calendar reminder
+    axiom.io/rotation-due: "2026-08-25"
+type: Opaque
+stringData:
+  # PostgreSQL
+  DATABASE_URL:      "postgresql+asyncpg://axiom:REPLACE_ME@axiom-postgres-postgresql:5432/axiom_db"
+  SYNC_DATABASE_URL: "postgresql://axiom:REPLACE_ME@axiom-postgres-postgresql:5432/axiom_db"
+
+  # Redis (Celery broker + result backend)
+  REDIS_URL: "redis://:REPLACE_ME@axiom-redis-master:6379/0"
+
+  # Stripe
+  STRIPE_SECRET_KEY:      "sk_live_REPLACE_ME"
+  STRIPE_WEBHOOK_SECRET:  "whsec_REPLACE_ME"
+
+  # OpenAI (vision + LLM inference)
+  OPENAI_API_KEY: "sk-REPLACE_ME"
+
+  # MOTOR Information Systems API (OEM data)
+  MOTOR_API_KEY:     "REPLACE_ME"
+  MOTOR_API_BASE:    "https://api.motor.com/v2"
+
+  # MinIO / S3-compatible object storage
+  MINIO_ENDPOINT:         "axiom-minio:9000"
+  MINIO_ACCESS_KEY:       "REPLACE_ME"
+  MINIO_SECRET_KEY:       "REPLACE_ME"
+  MINIO_BUCKET_ESTIMATES: "axiom-estimates"
+  MINIO_BUCKET_INVOICES:  "axiom-invoices"
+  MINIO_BUCKET_LIENS:     "axiom-liens"
+
+  # Qdrant vector store
+  QDRANT_HOST:       "axiom-qdrant"
+  QDRANT_PORT:       "6333"
+  QDRANT_API_KEY:    "REPLACE_ME"
+
+  # JWT signing
+  SECRET_KEY: "REPLACE_ME_256_BIT_RANDOM_HEX"
+
+  # Flower admin (Celery monitoring UI)
+  FLOWER_USER:     "axiom_admin"
+  FLOWER_PASSWORD: "REPLACE_ME"
+
+---
+# Pull secret for private container registry
+apiVersion: v1
+kind: Secret
+metadata:
+  name: axiom-registry-creds
+  namespace: axiom
+type: kubernetes.io/dockerconfigjson
+data:
+  # base64( {"auths":{"registry.example.com":{"username":"...","password":"...","auth":"..."}}} )
+  .dockerconfigjson: REPLACE_ME_BASE64

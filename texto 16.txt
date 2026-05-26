@@ -1,0 +1,1589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AXIOM Estimate — Collision Intelligence Platform</title>
+<meta name="description" content="Enterprise-grade AI collision estimating for body shops. Florida §713 lien automation, insurance claims compliance, and real-time damage analysis.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Archivo:ital,wght@0,300;0,400;0,600;1,300&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+:root {
+  --black:     #06080c;
+  --ink:       #0d1117;
+  --surface:   #141b25;
+  --border:    #1e2d3d;
+  --border-hi: #2e4660;
+  --acid:      #b8ff3c;
+  --acid-dim:  #7ab022;
+  --acid-mute: #1a2e05;
+  --amber:     #f5a623;
+  --amber-dim: #b37818;
+  --white:     #f0f4f8;
+  --muted:     #5a7a96;
+  --muted-hi:  #8aa8c4;
+  --font-hero: 'Bebas Neue', 'Impact', sans-serif;
+  --font-body: 'Archivo', sans-serif;
+  --font-mono: 'Share Tech Mono', monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; font-size: 16px; }
+
+body {
+  background: var(--black);
+  color: var(--white);
+  font-family: var(--font-body);
+  font-weight: 300;
+  line-height: 1.65;
+  overflow-x: hidden;
+}
+
+/* ── NOISE TEXTURE OVERLAY ── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9998;
+  opacity: 0.4;
+}
+
+a { color: inherit; text-decoration: none; }
+
+/* ── NAV ── */
+nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 48px;
+  height: 64px;
+  background: rgba(6, 8, 12, 0.88);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+.nav-logo {
+  font-family: var(--font-hero);
+  font-size: 22px;
+  letter-spacing: 0.12em;
+  color: var(--white);
+}
+
+.nav-logo span { color: var(--acid); }
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  list-style: none;
+}
+
+.nav-links a {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  transition: color 0.2s;
+}
+
+.nav-links a:hover { color: var(--acid); }
+
+.nav-cta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 8px 20px;
+  background: var(--acid);
+  color: var(--black);
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.nav-cta:hover { background: var(--white); }
+
+.lang-toggle {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+}
+
+.lang-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 5px 10px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.lang-btn.active {
+  background: var(--acid-mute);
+  color: var(--acid);
+}
+
+/* ── HERO ── */
+.hero {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  padding: 80px 48px 48px;
+  position: relative;
+  overflow: hidden;
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  top: -200px;
+  right: -300px;
+  width: 800px;
+  height: 800px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(184,255,60,0.04) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+/* Diagonal grid lines */
+.hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(30,45,61,0.3) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30,45,61,0.3) 1px, transparent 1px);
+  background-size: 80px 80px;
+  pointer-events: none;
+  mask-image: radial-gradient(ellipse at 60% 50%, black 30%, transparent 70%);
+}
+
+.hero-left { position: relative; z-index: 1; }
+
+.hero-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.eyebrow-line {
+  width: 40px;
+  height: 1px;
+  background: var(--acid);
+}
+
+.eyebrow-text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--acid);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.hero-h1 {
+  font-family: var(--font-hero);
+  font-size: clamp(56px, 7vw, 100px);
+  line-height: 0.92;
+  letter-spacing: 0.02em;
+  color: var(--white);
+  margin-bottom: 8px;
+}
+
+.hero-h1 .accent { color: var(--acid); }
+.hero-h1 .outline {
+  -webkit-text-stroke: 1px var(--border-hi);
+  color: transparent;
+}
+
+.hero-sub {
+  font-size: 17px;
+  color: var(--muted-hi);
+  max-width: 480px;
+  margin: 24px 0 40px;
+  font-weight: 300;
+  line-height: 1.7;
+}
+
+.hero-sub strong { color: var(--white); font-weight: 600; }
+
+.hero-actions {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 32px;
+  background: var(--acid);
+  color: var(--black);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-primary::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0);
+  transition: background 0.2s;
+}
+
+.btn-primary:hover::after { background: rgba(0,0,0,0.15); }
+
+.btn-outline {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 28px;
+  background: transparent;
+  color: var(--muted-hi);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border: 1px solid var(--border-hi);
+  transition: all 0.2s;
+}
+
+.btn-outline:hover {
+  border-color: var(--acid-dim);
+  color: var(--acid);
+}
+
+.hero-stats {
+  display: flex;
+  gap: 40px;
+  margin-top: 56px;
+  padding-top: 32px;
+  border-top: 1px solid var(--border);
+}
+
+.hero-stat-val {
+  font-family: var(--font-hero);
+  font-size: 40px;
+  color: var(--acid);
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+.hero-stat-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+
+/* Hero right — dashboard preview */
+.hero-right {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.dashboard-preview {
+  width: 100%;
+  max-width: 560px;
+  background: var(--ink);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  position: relative;
+}
+
+.preview-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.preview-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+}
+
+.preview-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  margin-left: 4px;
+}
+
+.preview-body { padding: 16px; }
+
+.preview-metric-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.preview-metric {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 10px;
+}
+
+.pm-val {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 22px;
+  color: var(--acid);
+  line-height: 1;
+}
+
+.pm-label {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--muted);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-top: 3px;
+}
+
+.preview-bar-section { margin-bottom: 12px; }
+
+.pb-label {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.pb-track {
+  height: 3px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.pb-fill {
+  height: 100%;
+  background: var(--acid);
+  animation: bar-load 2s ease forwards;
+}
+
+@keyframes bar-load {
+  from { width: 0; }
+}
+
+.preview-log {
+  background: var(--black);
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--muted);
+  line-height: 1.9;
+}
+
+.log-ok   { color: var(--acid); }
+.log-info { color: #4a9eff; }
+.log-warn { color: var(--amber); }
+
+/* ── SECTIONS COMMON ── */
+section {
+  padding: 100px 48px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.section-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--acid);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  margin-bottom: 20px;
+}
+
+.section-tag::before {
+  content: '';
+  display: block;
+  width: 24px;
+  height: 1px;
+  background: var(--acid);
+}
+
+.section-h2 {
+  font-family: var(--font-hero);
+  font-size: clamp(40px, 5vw, 72px);
+  line-height: 0.95;
+  letter-spacing: 0.02em;
+  color: var(--white);
+  margin-bottom: 16px;
+}
+
+.section-h2 .acid { color: var(--acid); }
+
+.section-sub {
+  font-size: 16px;
+  color: var(--muted-hi);
+  max-width: 560px;
+  font-weight: 300;
+  margin-bottom: 60px;
+}
+
+/* ── OFFICES GRID ── */
+.offices-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  align-items: end;
+  margin-bottom: 60px;
+}
+
+.offices-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+}
+
+.office-card {
+  background: var(--ink);
+  padding: 32px;
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.office-card:hover { background: var(--surface); }
+
+.office-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--border);
+  transition: background 0.2s;
+}
+
+.office-card:hover::before { background: var(--acid); }
+
+.office-num {
+  font-family: var(--font-hero);
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.2em;
+  margin-bottom: 12px;
+}
+
+.office-name {
+  font-family: var(--font-hero);
+  font-size: 24px;
+  color: var(--white);
+  letter-spacing: 0.03em;
+  line-height: 1.1;
+  margin-bottom: 12px;
+}
+
+.office-desc {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.65;
+  margin-bottom: 20px;
+}
+
+.office-price {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.price-amount {
+  font-family: var(--font-hero);
+  font-size: 28px;
+  color: var(--acid);
+}
+
+.price-note {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.office-badge {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--amber);
+  background: rgba(245,166,35,0.1);
+  border: 1px solid rgba(245,166,35,0.3);
+  padding: 3px 8px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* ── PRICING SECTION ── */
+.pricing-section {
+  background: var(--ink);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 100px 48px;
+}
+
+.pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.pricing-card {
+  background: var(--ink);
+  padding: 40px 32px;
+  position: relative;
+}
+
+.pricing-card.featured {
+  background: var(--surface);
+}
+
+.pricing-card.featured::before {
+  content: 'MOST POPULAR';
+  position: absolute;
+  top: -1px;
+  left: 32px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--black);
+  background: var(--acid);
+  padding: 3px 10px;
+  letter-spacing: 0.1em;
+}
+
+.plan-name {
+  font-family: var(--font-hero);
+  font-size: 18px;
+  color: var(--muted-hi);
+  letter-spacing: 0.12em;
+  margin-bottom: 24px;
+}
+
+.plan-price {
+  font-family: var(--font-hero);
+  font-size: 56px;
+  color: var(--white);
+  line-height: 1;
+  letter-spacing: -0.01em;
+  margin-bottom: 4px;
+}
+
+.plan-price span {
+  font-size: 22px;
+  color: var(--muted);
+  vertical-align: top;
+  margin-top: 10px;
+  display: inline-block;
+}
+
+.plan-per {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  margin-bottom: 32px;
+}
+
+.plan-features {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 36px;
+}
+
+.plan-features li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted-hi);
+}
+
+.plan-features li::before {
+  content: '▸';
+  color: var(--acid);
+  font-size: 11px;
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.plan-btn {
+  width: 100%;
+  padding: 13px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.plan-btn.outlined {
+  background: transparent;
+  color: var(--acid-dim);
+  border: 1px solid var(--border-hi);
+}
+
+.plan-btn.outlined:hover {
+  border-color: var(--acid-dim);
+  color: var(--acid);
+}
+
+.plan-btn.filled {
+  background: var(--acid);
+  color: var(--black);
+  border: none;
+  font-weight: 700;
+}
+
+.plan-btn.filled:hover { filter: brightness(0.9); }
+
+/* ── FORMULA DISPLAY ── */
+.formula-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 64px;
+  align-items: center;
+}
+
+.formula-visual {
+  background: var(--black);
+  border: 1px solid var(--border);
+  padding: 32px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 2;
+}
+
+.fv-comment { color: var(--muted); }
+.fv-var     { color: #4a9eff; }
+.fv-num     { color: var(--amber); }
+.fv-op      { color: var(--muted-hi); }
+.fv-result  { color: var(--acid); font-size: 15px; }
+
+.formula-promise {
+  padding: 0;
+}
+
+.promise-item {
+  display: flex;
+  gap: 20px;
+  padding: 24px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.promise-item:last-child { border-bottom: none; }
+
+.promise-icon {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-hero);
+  font-size: 14px;
+  color: var(--acid);
+  flex-shrink: 0;
+}
+
+.promise-title {
+  font-family: var(--font-hero);
+  font-size: 18px;
+  color: var(--white);
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.promise-desc {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+/* ── BILINGUAL SPEC BLOCK ── */
+.bilingual-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  margin-top: 48px;
+}
+
+.bilingual-col {
+  background: var(--ink);
+  padding: 40px;
+}
+
+.bilingual-col.es { background: var(--surface); }
+
+.bi-tag {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.bi-tag.en { color: var(--acid); }
+.bi-tag.es { color: var(--amber); }
+
+.bi-h3 {
+  font-family: var(--font-hero);
+  font-size: 22px;
+  color: var(--white);
+  letter-spacing: 0.04em;
+  margin-bottom: 12px;
+}
+
+.bi-body {
+  font-size: 13px;
+  color: var(--muted-hi);
+  line-height: 1.7;
+  margin-bottom: 16px;
+}
+
+.bi-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bi-list li {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.bi-list li::before {
+  content: '//';
+  font-family: var(--font-mono);
+  color: var(--border-hi);
+  font-size: 10px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* ── TRUST STRIP ── */
+.trust-strip {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 28px 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 48px;
+  flex-wrap: wrap;
+}
+
+.trust-item {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trust-item::before {
+  content: '■';
+  font-size: 6px;
+  color: var(--acid);
+}
+
+/* ── CTA SECTION ── */
+.cta-section {
+  background: var(--acid-mute);
+  border: 1px solid rgba(184,255,60,0.15);
+  margin: 0 48px;
+  padding: 80px 64px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 48px;
+  align-items: center;
+}
+
+.cta-h2 {
+  font-family: var(--font-hero);
+  font-size: clamp(36px, 4vw, 60px);
+  line-height: 0.95;
+  color: var(--acid);
+  letter-spacing: 0.02em;
+  margin-bottom: 12px;
+}
+
+.cta-sub {
+  font-size: 15px;
+  color: rgba(240,244,248,0.6);
+  font-weight: 300;
+}
+
+/* ── FOOTER ── */
+footer {
+  background: var(--black);
+  border-top: 1px solid var(--border);
+  padding: 48px;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 48px;
+}
+
+.footer-brand {
+  font-family: var(--font-hero);
+  font-size: 28px;
+  letter-spacing: 0.1em;
+  color: var(--white);
+  margin-bottom: 12px;
+}
+
+.footer-brand span { color: var(--acid); }
+
+.footer-tagline {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+
+.footer-legal {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  line-height: 1.8;
+}
+
+.footer-col-title {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--acid);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+
+.footer-links {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.footer-links a {
+  font-size: 13px;
+  color: var(--muted);
+  transition: color 0.2s;
+}
+
+.footer-links a:hover { color: var(--white); }
+
+.footer-bottom {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+  padding-top: 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.footer-copy {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+}
+
+/* ── ANIMATIONS ── */
+.fade-up {
+  opacity: 0;
+  transform: translateY(24px);
+  animation: fadeUp 0.7s ease forwards;
+}
+
+@keyframes fadeUp {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-up:nth-child(1) { animation-delay: 0.1s; }
+.fade-up:nth-child(2) { animation-delay: 0.2s; }
+.fade-up:nth-child(3) { animation-delay: 0.3s; }
+.fade-up:nth-child(4) { animation-delay: 0.4s; }
+
+/* ── RESPONSIVE ── */
+@media (max-width: 1024px) {
+  .hero             { grid-template-columns: 1fr; padding: 100px 24px 48px; }
+  .hero-right       { display: none; }
+  .formula-section  { grid-template-columns: 1fr; }
+  .offices-header   { grid-template-columns: 1fr; }
+  .bilingual-grid   { grid-template-columns: 1fr; }
+  footer            { grid-template-columns: 1fr 1fr; }
+  .cta-section      { grid-template-columns: 1fr; margin: 0 24px; }
+  nav               { padding: 0 24px; }
+  .nav-links        { display: none; }
+  section           { padding: 72px 24px; }
+}
+
+/* ── LANGUAGE SWITCHING ── */
+[data-lang="es"] { display: none; }
+body.lang-es [data-lang="en"] { display: none; }
+body.lang-es [data-lang="es"] { display: block; }
+body.lang-es .lang-btn.en { background: transparent; color: var(--muted); }
+body.lang-es .lang-btn.es { background: var(--acid-mute); color: var(--acid); }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="nav-logo">AXIOM<span>.</span>EST</div>
+  <ul class="nav-links">
+    <li><a href="#offices">Offices</a></li>
+    <li><a href="#pricing">Pricing</a></li>
+    <li><a href="#technology">Technology</a></li>
+    <li><a href="#compliance">FL §713</a></li>
+  </ul>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <div class="lang-toggle">
+      <button class="lang-btn en active" onclick="setLang('en')">EN</button>
+      <button class="lang-btn es" onclick="setLang('es')">ES</button>
+    </div>
+    <button class="nav-cta" onclick="window.location='#pricing'">
+      <span data-lang="en">Request Access</span>
+      <span data-lang="es">Solicitar Acceso</span>
+    </button>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section style="padding:0;max-width:none;">
+  <div class="hero">
+    <div class="hero-left">
+      <div class="hero-eyebrow fade-up">
+        <div class="eyebrow-line"></div>
+        <div class="eyebrow-text" data-lang="en">Collision Intelligence Platform // FL Jurisdiction</div>
+        <div class="eyebrow-text" data-lang="es">Plataforma de Inteligencia de Colisión // FL</div>
+      </div>
+
+      <h1 class="hero-h1 fade-up">
+        <span data-lang="en">
+          STOP<br>
+          <span class="outline">LEAVING</span><br>
+          <span class="accent">MONEY</span><br>
+          BEHIND
+        </span>
+        <span data-lang="es">
+          DEJA DE<br>
+          <span class="outline">PERDER</span><br>
+          <span class="accent">DINERO</span><br>
+          EN CADA CASO
+        </span>
+      </h1>
+
+      <p class="hero-sub fade-up">
+        <span data-lang="en">
+          AXIOM gives your shop <strong>AI-generated OEM estimates</strong>, automated insurance claims, and Florida <strong>§713 lien filing</strong> — all from a single dashboard.
+        </span>
+        <span data-lang="es">
+          AXIOM le da a tu taller <strong>estimados OEM con IA</strong>, reclamos de seguros automatizados y tramitación de gravámenes <strong>§713 de Florida</strong>, todo desde un solo panel.
+        </span>
+      </p>
+
+      <div class="hero-actions fade-up">
+        <button class="btn-primary">
+          <span data-lang="en">Start Free Trial ▸</span>
+          <span data-lang="es">Prueba Gratis ▸</span>
+        </button>
+        <button class="btn-outline">
+          <span data-lang="en">Watch Demo</span>
+          <span data-lang="es">Ver Demo</span>
+        </button>
+      </div>
+
+      <div class="hero-stats fade-up">
+        <div>
+          <div class="hero-stat-val">99.9%</div>
+          <div class="hero-stat-label" data-lang="en">System Uptime</div>
+          <div class="hero-stat-label" data-lang="es">Disponibilidad</div>
+        </div>
+        <div>
+          <div class="hero-stat-val">$5.46</div>
+          <div class="hero-stat-label" data-lang="en">Per Estimate</div>
+          <div class="hero-stat-label" data-lang="es">Por Estimado</div>
+        </div>
+        <div>
+          <div class="hero-stat-val">§713</div>
+          <div class="hero-stat-label" data-lang="en">FL Lien Compliant</div>
+          <div class="hero-stat-label" data-lang="es">Gravamen FL</div>
+        </div>
+        <div>
+          <div class="hero-stat-val">&lt;300ms</div>
+          <div class="hero-stat-label" data-lang="en">Avg Response</div>
+          <div class="hero-stat-label" data-lang="es">Respuesta</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dashboard preview widget -->
+    <div class="hero-right">
+      <div class="dashboard-preview">
+        <div class="preview-titlebar">
+          <div class="preview-dot" style="background:#ff5f57;"></div>
+          <div class="preview-dot" style="background:#febc2e;"></div>
+          <div class="preview-dot" style="background:#28c840;"></div>
+          <span class="preview-title">AXIOM CONTROL MATRIX v1.1.0</span>
+          <span style="margin-left:auto;font-family:var(--font-mono);font-size:9px;color:#b8ff3c;" id="live-clock">--:--:--</span>
+        </div>
+        <div class="preview-body">
+          <div class="preview-metric-row">
+            <div class="preview-metric">
+              <div class="pm-val" id="jobs-counter">2,341</div>
+              <div class="pm-label" data-lang="en">Jobs Today</div>
+              <div class="pm-label" data-lang="es">Trabajos Hoy</div>
+            </div>
+            <div class="preview-metric">
+              <div class="pm-val" style="color:#f5a623;">$4,821</div>
+              <div class="pm-label" data-lang="en">Revenue</div>
+              <div class="pm-label" data-lang="es">Ingresos</div>
+            </div>
+            <div class="preview-metric">
+              <div class="pm-val">147</div>
+              <div class="pm-label" data-lang="en">Active Shops</div>
+              <div class="pm-label" data-lang="es">Talleres</div>
+            </div>
+          </div>
+          <div class="preview-bar-section">
+            <div class="pb-label"><span data-lang="en">VRAM Utilization</span><span data-lang="es">Uso VRAM</span><span style="color:#b8ff3c;">68%</span></div>
+            <div class="pb-track"><div class="pb-fill" style="width:68%;"></div></div>
+          </div>
+          <div class="preview-bar-section">
+            <div class="pb-label"><span data-lang="en">Celery Workers</span><span data-lang="es">Workers</span><span style="color:#b8ff3c;">4/4 ONLINE</span></div>
+            <div class="pb-track"><div class="pb-fill" style="width:100%;animation-delay:0.3s;"></div></div>
+          </div>
+          <div class="preview-log">
+            <div id="hero-log-1"><span class="log-ok">[OK]</span> estimate job 3f9a completed // 284ms</div>
+            <div id="hero-log-2"><span class="log-info">[INFO]</span> stripe webhook verified // $5.46</div>
+            <div id="hero-log-3"><span class="log-warn">[WARN]</span> audit queue depth: 12</div>
+            <div id="hero-log-4"><span class="log-ok">[OK]</span> FL DMV lien filed // certified mail dispatched</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- TRUST STRIP -->
+<div class="trust-strip">
+  <div class="trust-item" data-lang="en">Florida Statute §713 Compliant</div>
+  <div class="trust-item" data-lang="es">Cumple Estatuto FL §713</div>
+  <div class="trust-item" data-lang="en">CCC ONE / Mitchell Formats</div>
+  <div class="trust-item" data-lang="es">Formatos CCC ONE / Mitchell</div>
+  <div class="trust-item" data-lang="en">CIECA BMS 2026.1 Output</div>
+  <div class="trust-item" data-lang="es">Salida CIECA BMS 2026.1</div>
+  <div class="trust-item" data-lang="en">Stripe Fee Absorption Built-In</div>
+  <div class="trust-item" data-lang="es">Absorción de Tarifas Stripe</div>
+  <div class="trust-item" data-lang="en">99.9% Uptime SLA</div>
+  <div class="trust-item" data-lang="es">SLA 99.9% Disponibilidad</div>
+</div>
+
+<!-- 7 OFFICES -->
+<section id="offices" style="max-width:none;padding:100px 48px;">
+  <div class="offices-header" style="max-width:1400px;margin:0 auto 60px;">
+    <div>
+      <div class="section-tag" data-lang="en">7 Virtual Offices</div>
+      <div class="section-tag" data-lang="es">7 Oficinas Virtuales</div>
+      <h2 class="section-h2">
+        <span data-lang="en">ONE PLATFORM.<br><span class="acid">7 SPECIALISTS.</span></span>
+        <span data-lang="es">UNA PLATAFORMA.<br><span class="acid">7 ESPECIALISTAS.</span></span>
+      </h2>
+    </div>
+    <p class="section-sub">
+      <span data-lang="en">Each office maps directly to a dedicated AI agent, backend compute cluster, and compliance pathway — billed per use, never per seat.</span>
+      <span data-lang="es">Cada oficina se conecta directamente a un agente de IA dedicado, clúster de cómputo y ruta de cumplimiento — cobrado por uso, nunca por asiento.</span>
+    </p>
+  </div>
+
+  <div class="offices-grid" style="max-width:1400px;margin:0 auto;">
+    <div class="office-card">
+      <div class="office-num">OFFICE 01</div>
+      <div class="office-name" data-lang="en">AI DAMAGE<br>ESTIMATOR</div>
+      <div class="office-name" data-lang="es">ESTIMADOR DE<br>DAÑOS IA</div>
+      <p class="office-desc" data-lang="en">Upload photos. CUDA-accelerated vision AI detects impact zones, cross-references OEM part numbers via MOTOR API, and delivers a compliant estimate PDF in seconds.</p>
+      <p class="office-desc" data-lang="es">Sube fotos. La IA de visión acelerada con CUDA detecta zonas de impacto, cruza referencias con números de partes OEM vía MOTOR API y entrega un PDF de estimado conforme en segundos.</p>
+      <div class="office-price">
+        <span class="price-amount">$5.46</span>
+        <span class="price-note" data-lang="en">per estimate</span>
+        <span class="price-note" data-lang="es">por estimado</span>
+      </div>
+    </div>
+
+    <div class="office-card">
+      <div class="office-num">OFFICE 02</div>
+      <div class="office-name" data-lang="en">CLAIMS<br>BUREAU</div>
+      <div class="office-name" data-lang="es">OFICINA DE<br>RECLAMOS</div>
+      <p class="office-desc" data-lang="en">Auto-formats estimates into CCC ONE / Mitchell compliance strings. Evaluates carrier guidelines, flags labor rate variances, and eliminates manual negotiations.</p>
+      <p class="office-desc" data-lang="es">Formatea automáticamente los estimados en cadenas de cumplimiento CCC ONE / Mitchell. Evalúa pautas de la aseguradora y elimina negociaciones manuales.</p>
+      <div class="office-price">
+        <span class="price-amount">$5.46</span>
+        <span class="price-note" data-lang="en">per claim</span>
+        <span class="price-note" data-lang="es">por reclamo</span>
+      </div>
+    </div>
+
+    <div class="office-card">
+      <div class="office-num">OFFICE 03</div>
+      <div class="office-name" data-lang="en">TOTAL LOSS<br>LAB</div>
+      <div class="office-name" data-lang="es">LAB PÉRDIDA<br>TOTAL</div>
+      <p class="office-desc" data-lang="en">Live salvage auction feeds from IAAI + Copart. Computes ACV vs. repair cost ratio against the FL 75% threshold. Instant total-loss determination vector.</p>
+      <p class="office-desc" data-lang="es">Feeds en vivo de subastas de IAAI + Copart. Calcula la relación ACV vs. costo de reparación frente al umbral FL del 75%. Determinación instantánea de pérdida total.</p>
+      <div class="office-price">
+        <span class="price-amount">$5.46</span>
+        <span class="price-note" data-lang="en">per assessment</span>
+        <span class="price-note" data-lang="es">por evaluación</span>
+      </div>
+    </div>
+
+    <div class="office-card">
+      <div class="office-num">OFFICE 04</div>
+      <div class="office-name" data-lang="en">FL §713 LIEN<br>BUREAU</div>
+      <div class="office-name" data-lang="es">OFICINA DE<br>GRAVAMEN FL</div>
+      <div class="office-badge">Premium</div>
+      <p class="office-desc" data-lang="en">Automates the complete Florida Statute §713 mechanic's lien pipeline — DMV title lookup, lienholder bank address resolution, HSMV form generation, and certified mail dispatch.</p>
+      <p class="office-desc" data-lang="es">Automatiza el proceso completo del gravamen mecánico del Estatuto §713 de Florida — búsqueda de título DMV, resolución de dirección bancaria del titular y despacho de correo certificado.</p>
+      <div class="office-price">
+        <span class="price-amount" style="color:var(--amber);">$102.27</span>
+        <span class="price-note" data-lang="en">per filing</span>
+        <span class="price-note" data-lang="es">por trámite</span>
+      </div>
+    </div>
+
+    <div class="office-card">
+      <div class="office-num">OFFICE 05</div>
+      <div class="office-name" data-lang="en">INVOICE<br>AUDIT</div>
+      <div class="office-name" data-lang="es">AUDITORÍA DE<br>FACTURAS</div>
+      <p class="office-desc" data-lang="en">OCR scans every line item against live parts catalogs. Flags inflated margins, unperformed OEM procedures, and duplicate charges. Quantifies the exact profit leak.</p>
+      <p class="office-desc" data-lang="es">OCR escanea cada línea de la factura contra catálogos de partes en vivo. Detecta márgenes inflados, procedimientos OEM no realizados y cargos duplicados.</p>
+      <div class="office-price">
+        <span class="price-amount">$5.46</span>
+        <span class="price-note" data-lang="en">per audit</span>
+        <span class="price-note" data-lang="es">por auditoría</span>
+      </div>
+    </div>
+
+    <div class="office-card">
+      <div class="office-num">OFFICE 06</div>
+      <div class="office-name" data-lang="en">CPO<br>INSPECTION</div>
+      <div class="office-name" data-lang="es">INSPECCIÓN<br>CPO</div>
+      <p class="office-desc" data-lang="en">Ingests OBD-II data, validates against manufacturer multi-point checklist templates, and issues encrypted digital CPO badges with blockchain-anchored verification.</p>
+      <p class="office-desc" data-lang="es">Ingiere datos OBD-II, valida contra plantillas de inspección multipunto del fabricante y emite insignias CPO digitales encriptadas con verificación anclada.</p>
+      <div class="office-price">
+        <span class="price-amount">$5.46</span>
+        <span class="price-note" data-lang="en">per inspection</span>
+        <span class="price-note" data-lang="es">por inspección</span>
+      </div>
+    </div>
+
+    <div class="office-card" style="grid-column: span 1;">
+      <div class="office-num">OFFICE 07</div>
+      <div class="office-name" data-lang="en">VRAM<br>BROKERAGE</div>
+      <div class="office-name" data-lang="es">CORRETAJE<br>VRAM</div>
+      <div class="office-badge" style="color:#4a9eff;background:rgba(74,158,255,0.1);border-color:rgba(74,158,255,0.3);">Revenue</div>
+      <p class="office-desc" data-lang="en">When your compute cluster is idle, the platform automatically leases unused VRAM to decentralized AI compute markets and deposits earnings to your Stripe balance.</p>
+      <p class="office-desc" data-lang="es">Cuando tu clúster está inactivo, la plataforma arrienda automáticamente la VRAM no utilizada a mercados de cómputo descentralizados y deposita las ganancias en tu saldo de Stripe.</p>
+      <div class="office-price">
+        <span class="price-amount" style="color:#4a9eff;">Dynamic</span>
+        <span class="price-note" data-lang="en">yield per GB-hr</span>
+        <span class="price-note" data-lang="es">rendimiento por GB-hr</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PRICING -->
+<div class="pricing-section" id="pricing">
+  <div style="max-width:1400px;margin:0 auto;">
+    <div class="section-tag" data-lang="en">Transparent Pricing</div>
+    <div class="section-tag" data-lang="es">Precios Transparentes</div>
+    <h2 class="section-h2" style="margin-bottom:8px;">
+      <span data-lang="en">PAY FOR<br><span class="acid">WHAT YOU USE.</span></span>
+      <span data-lang="es">PAGA POR<br><span class="acid">LO QUE USAS.</span></span>
+    </h2>
+    <p class="section-sub" data-lang="en">Base platform subscription + per-job transactional billing. No annual contracts, no per-seat licenses.</p>
+    <p class="section-sub" data-lang="es">Suscripción base + facturación transaccional por trabajo. Sin contratos anuales ni licencias por usuario.</p>
+
+    <div class="pricing-grid">
+      <div class="pricing-card">
+        <div class="plan-name" data-lang="en">STARTER</div>
+        <div class="plan-name" data-lang="es">INICIAL</div>
+        <div class="plan-price"><span>$</span>99</div>
+        <div class="plan-per" data-lang="en">/ month base + $5.46 per transaction</div>
+        <div class="plan-per" data-lang="es">/ mes base + $5.46 por transacción</div>
+        <ul class="plan-features">
+          <li data-lang="en">Offices 1, 2, 3, 5, 6 included</li>
+          <li data-lang="es">Oficinas 1, 2, 3, 5, 6 incluidas</li>
+          <li data-lang="en">Up to 5 shop users</li>
+          <li data-lang="es">Hasta 5 usuarios del taller</li>
+          <li data-lang="en">Standard support (48h)</li>
+          <li data-lang="es">Soporte estándar (48h)</li>
+          <li data-lang="en">CIECA BMS JSON output</li>
+          <li data-lang="es">Salida CIECA BMS JSON</li>
+        </ul>
+        <button class="plan-btn outlined" data-lang="en">Get Started</button>
+        <button class="plan-btn outlined" data-lang="es">Comenzar</button>
+      </div>
+
+      <div class="pricing-card featured">
+        <div class="plan-name" data-lang="en">PROFESSIONAL</div>
+        <div class="plan-name" data-lang="es">PROFESIONAL</div>
+        <div class="plan-price"><span>$</span>99</div>
+        <div class="plan-per" data-lang="en">/ month + all 7 offices unlocked</div>
+        <div class="plan-per" data-lang="es">/ mes + las 7 oficinas desbloqueadas</div>
+        <ul class="plan-features">
+          <li data-lang="en">All 7 offices including FL §713 Lien</li>
+          <li data-lang="es">Las 7 oficinas incluido FL §713</li>
+          <li data-lang="en">Unlimited shop users</li>
+          <li data-lang="es">Usuarios ilimitados</li>
+          <li data-lang="en">Priority support (4h)</li>
+          <li data-lang="es">Soporte prioritario (4h)</li>
+          <li data-lang="en">CIECA BMS JSON + XML output</li>
+          <li data-lang="es">Salida CIECA BMS JSON + XML</li>
+          <li data-lang="en">VRAM brokerage revenue sharing</li>
+          <li data-lang="es">Reparto de ingresos VRAM</li>
+          <li data-lang="en">Qdrant semantic estimate search</li>
+          <li data-lang="es">Búsqueda semántica de estimados</li>
+        </ul>
+        <button class="plan-btn filled" data-lang="en">Start Free Trial</button>
+        <button class="plan-btn filled" data-lang="es">Prueba Gratis</button>
+      </div>
+
+      <div class="pricing-card">
+        <div class="plan-name">ENTERPRISE</div>
+        <div class="plan-price" style="font-size:40px;margin-bottom:8px;" data-lang="en">Custom</div>
+        <div class="plan-price" style="font-size:40px;margin-bottom:8px;" data-lang="es">A Medida</div>
+        <div class="plan-per" data-lang="en">volume pricing + dedicated cluster</div>
+        <div class="plan-per" data-lang="es">precios por volumen + clúster dedicado</div>
+        <ul class="plan-features">
+          <li data-lang="en">Dedicated K8s namespace + GPU nodes</li>
+          <li data-lang="es">Namespace K8s dedicado + nodos GPU</li>
+          <li data-lang="en">SSO / SAML integration</li>
+          <li data-lang="es">Integración SSO / SAML</li>
+          <li data-lang="en">SOC2 compliance reporting</li>
+          <li data-lang="es">Informes de cumplimiento SOC2</li>
+          <li data-lang="en">Multi-state lien pipeline</li>
+          <li data-lang="es">Pipeline de gravámenes multi-estado</li>
+          <li data-lang="en">White-label portal option</li>
+          <li data-lang="es">Opción de portal white-label</li>
+        </ul>
+        <button class="plan-btn outlined" data-lang="en">Contact Sales</button>
+        <button class="plan-btn outlined" data-lang="es">Contactar Ventas</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- FORMULA + PROMISES -->
+<section id="technology">
+  <div class="section-tag" data-lang="en">Financial Architecture</div>
+  <div class="section-tag" data-lang="es">Arquitectura Financiera</div>
+  <h2 class="section-h2">
+    <span data-lang="en">FEES ARE<br><span class="acid">YOUR PROBLEM.</span><br>NOT OURS.</span>
+    <span data-lang="es">LAS TARIFAS SON<br><span class="acid">TU PROBLEMA.</span><br>NO EL NUESTRO.</span>
+  </h2>
+  <p class="section-sub">
+    <span data-lang="en">Every charge is mathematically wrapped so Stripe's processing fees are passed forward. The platform always nets exactly what it quotes.</span>
+    <span data-lang="es">Cada cobro está matemáticamente envuelto para que las tarifas de Stripe se trasladen al cliente. La plataforma siempre recibe exactamente lo que cotiza.</span>
+  </p>
+
+  <div class="formula-section">
+    <div class="formula-visual">
+      <div class="fv-comment"># Stripe fee absorption — standard tier</div>
+      <div><span class="fv-var">target_net</span> <span class="fv-op">= </span><span class="fv-num">$5.00</span></div>
+      <div><span class="fv-var">stripe_fixed</span> <span class="fv-op">= </span><span class="fv-num">$0.30</span></div>
+      <div><span class="fv-var">stripe_rate</span> <span class="fv-op">= </span><span class="fv-num">2.9%</span></div>
+      <br>
+      <div><span class="fv-var">client_charge</span> <span class="fv-op">= (</span><span class="fv-num">5.00</span> <span class="fv-op">+</span> <span class="fv-num">0.30</span><span class="fv-op">) / (1 -</span> <span class="fv-num">0.029</span><span class="fv-op">)</span></div>
+      <div><span class="fv-var">client_charge</span> <span class="fv-op">= </span><span class="fv-result">$5.46</span> <span class="fv-comment">// 546 cents</span></div>
+      <br>
+      <div class="fv-comment"># Premium — FL §713 Lien module</div>
+      <div><span class="fv-var">target_net</span> <span class="fv-op">= </span><span class="fv-num">$99.00</span></div>
+      <div><span class="fv-var">client_charge</span> <span class="fv-op">= (</span><span class="fv-num">99.00</span> <span class="fv-op">+</span> <span class="fv-num">0.30</span><span class="fv-op">) / (1 -</span> <span class="fv-num">0.029</span><span class="fv-op">)</span></div>
+      <div><span class="fv-var">client_charge</span> <span class="fv-op">= </span><span class="fv-result">$102.27</span> <span class="fv-comment">// 10227 cents</span></div>
+    </div>
+
+    <div class="formula-promise">
+      <div class="promise-item">
+        <div class="promise-icon">01</div>
+        <div>
+          <div class="promise-title" data-lang="en">Zero Margin Erosion</div>
+          <div class="promise-title" data-lang="es">Sin Erosión de Margen</div>
+          <p class="promise-desc" data-lang="en">The absorption formula runs before every Stripe API call. The platform's net is protected regardless of card type or international fees.</p>
+          <p class="promise-desc" data-lang="es">La fórmula de absorción se ejecuta antes de cada llamada a la API de Stripe. El margen neto de la plataforma está protegido independientemente del tipo de tarjeta.</p>
+        </div>
+      </div>
+      <div class="promise-item">
+        <div class="promise-icon">02</div>
+        <div>
+          <div class="promise-title" data-lang="en">Idempotent Billing</div>
+          <div class="promise-title" data-lang="es">Facturación Idempotente</div>
+          <p class="promise-desc" data-lang="en">Every charge is written to the payments ledger before Stripe is called. Network failures never result in double charges or untracked transactions.</p>
+          <p class="promise-desc" data-lang="es">Cada cobro se escribe en el libro de pagos antes de llamar a Stripe. Los fallos de red nunca resultan en cargos dobles o transacciones sin registro.</p>
+        </div>
+      </div>
+      <div class="promise-item">
+        <div class="promise-icon">03</div>
+        <div>
+          <div class="promise-title" data-lang="en">Live Cost Ledger</div>
+          <div class="promise-title" data-lang="es">Libro de Costos en Vivo</div>
+          <p class="promise-desc" data-lang="en">GPU seconds, LLM tokens, and vision API calls are logged to api_costs in real time at the tail of every Celery task.</p>
+          <p class="promise-desc" data-lang="es">Los segundos de GPU, tokens LLM y llamadas de API de visión se registran en api_costs en tiempo real al final de cada tarea de Celery.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- BILINGUAL SPEC -->
+<section id="compliance" style="background:var(--ink);border-top:1px solid var(--border);border-bottom:1px solid var(--border);max-width:none;padding:100px 48px;">
+  <div style="max-width:1400px;margin:0 auto;">
+    <div class="section-tag" data-lang="en">Florida §713 Deep-Dive</div>
+    <div class="section-tag" data-lang="es">Análisis Profundo FL §713</div>
+    <h2 class="section-h2">
+      <span data-lang="en">LEGAL FILING<br><span class="acid">AUTOMATED.</span></span>
+      <span data-lang="es">TRÁMITE LEGAL<br><span class="acid">AUTOMATIZADO.</span></span>
+    </h2>
+
+    <div class="bilingual-grid">
+      <div class="bilingual-col">
+        <div class="bi-tag en">// English — §713 Compliance Spec</div>
+        <div class="bi-h3">Complete Mechanic's Lien Pipeline</div>
+        <p class="bi-body">When a vehicle owner fails to pay for repairs, the lien bureau agent executes a zero-variance legal workflow bound to Florida Statute §713. No attorneys required for the filing process itself.</p>
+        <ul class="bi-list">
+          <li>VIN matched against FL HSMV DMV title records via certified REST API</li>
+          <li>Lienholder bank institution resolved from registered title data</li>
+          <li>Certified mailing address fetched and verified against banking registries</li>
+          <li>HSMV Form 82085 auto-populated and digitally sealed</li>
+          <li>Certified mail tracking number issued via USPS API</li>
+          <li>All documents stored immutably in api_costs audit trail</li>
+          <li>$102.27 charged to shop's Stripe saved payment method</li>
+        </ul>
+      </div>
+
+      <div class="bilingual-col es">
+        <div class="bi-tag es">// Español — Especificación de Cumplimiento §713</div>
+        <div class="bi-h3">Pipeline Completo de Gravamen Mecánico</div>
+        <p class="bi-body">Cuando el propietario de un vehículo no paga las reparaciones, el agente de la oficina de gravámenes ejecuta un flujo de trabajo legal de tolerancia cero vinculado al Estatuto §713 de Florida. No se requieren abogados para el proceso de tramitación.</p>
+        <ul class="bi-list">
+          <li>VIN verificado en registros de títulos HSMV del DMV de Florida via API REST certificada</li>
+          <li>Institución bancaria titular resuelta desde datos de título registrado</li>
+          <li>Dirección de correo certificado obtenida y verificada contra registros bancarios</li>
+          <li>Formulario HSMV 82085 completado automáticamente y sellado digitalmente</li>
+          <li>Número de seguimiento de correo certificado emitido via API del USPS</li>
+          <li>Todos los documentos almacenados de forma inmutable en el registro de auditoría</li>
+          <li>$102.27 cargado al método de pago guardado del taller en Stripe</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<div style="padding:80px 0;background:var(--black);">
+  <div class="cta-section">
+    <div>
+      <h2 class="cta-h2">
+        <span data-lang="en">READY TO RUN<br>AXIOM IN YOUR SHOP?</span>
+        <span data-lang="es">¿LISTO PARA CORRER<br>AXIOM EN TU TALLER?</span>
+      </h2>
+      <p class="cta-sub" data-lang="en">No annual contracts. No per-seat pricing. Just AI collision intelligence at $5.46 per job.</p>
+      <p class="cta-sub" data-lang="es">Sin contratos anuales. Sin precio por usuario. Solo inteligencia de colisión IA a $5.46 por trabajo.</p>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <button class="btn-primary" style="justify-content:center;">
+        <span data-lang="en">Start Free Trial ▸</span>
+        <span data-lang="es">Prueba Gratis ▸</span>
+      </button>
+      <button class="btn-outline" style="justify-content:center;">
+        <span data-lang="en">Book a Demo</span>
+        <span data-lang="es">Reservar Demo</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <div>
+    <div class="footer-brand">AXIOM<span>.</span></div>
+    <p class="footer-tagline" data-lang="en">Enterprise collision intelligence for body shops entering the modern market. Florida-native. AI-native. Built for the shops that refuse to leave money behind.</p>
+    <p class="footer-tagline" data-lang="es">Inteligencia de colisión enterprise para talleres que ingresan al mercado moderno. Nativo de Florida. Nativo de IA. Construido para los talleres que se niegan a dejar dinero atrás.</p>
+    <div class="footer-legal">
+      AXIOM ESTIMATE ENGINE v1.1.0<br>
+      REGULATED // FL STATUTE §713 // CIECA BMS 2026.1<br>
+      STRIPE PAYMENT PROCESSING // MOTOR OEM DATA
+    </div>
+  </div>
+
+  <div>
+    <div class="footer-col-title" data-lang="en">Platform</div>
+    <div class="footer-col-title" data-lang="es">Plataforma</div>
+    <ul class="footer-links">
+      <li><a href="#offices" data-lang="en">7 Offices</a><a href="#offices" data-lang="es">7 Oficinas</a></li>
+      <li><a href="#pricing" data-lang="en">Pricing</a><a href="#pricing" data-lang="es">Precios</a></li>
+      <li><a href="#technology" data-lang="en">Technology</a><a href="#technology" data-lang="es">Tecnología</a></li>
+      <li><a href="#compliance" data-lang="en">FL §713</a><a href="#compliance" data-lang="es">FL §713</a></li>
+    </ul>
+  </div>
+
+  <div>
+    <div class="footer-col-title">API</div>
+    <ul class="footer-links">
+      <li><a href="#">Docs</a></li>
+      <li><a href="#">CIECA BMS Schema</a></li>
+      <li><a href="#">Webhooks</a></li>
+      <li><a href="#">Status</a></li>
+    </ul>
+  </div>
+
+  <div>
+    <div class="footer-col-title" data-lang="en">Legal</div>
+    <div class="footer-col-title" data-lang="es">Legal</div>
+    <ul class="footer-links">
+      <li><a href="#" data-lang="en">Privacy Policy</a><a href="#" data-lang="es">Política de Privacidad</a></li>
+      <li><a href="#" data-lang="en">Terms of Service</a><a href="#" data-lang="es">Términos de Servicio</a></li>
+      <li><a href="#" data-lang="en">FL §713 Disclosure</a><a href="#" data-lang="es">Divulgación FL §713</a></li>
+    </ul>
+  </div>
+
+  <div class="footer-bottom">
+    <span class="footer-copy">© 2026 AXIOM ESTIMATE ENGINE LLC — MIAMI, FL — ALL RIGHTS RESERVED</span>
+    <span class="footer-copy" data-lang="en">Built for the collision market. Powered by AI. Protected by Florida law.</span>
+    <span class="footer-copy" data-lang="es">Construido para el mercado de colisión. Impulsado por IA. Protegido por la ley de Florida.</span>
+  </div>
+</footer>
+
+<script>
+// Clock
+function tick() {
+  const t = new Date().toTimeString().slice(0,8);
+  document.getElementById('live-clock').textContent = t;
+}
+setInterval(tick, 1000);
+tick();
+
+// Language toggle
+function setLang(lang) {
+  document.body.classList.toggle('lang-es', lang === 'es');
+  document.querySelector('.lang-btn.en').classList.toggle('active', lang === 'en');
+  document.querySelector('.lang-btn.es').classList.toggle('active', lang === 'es');
+}
+
+// Animated job counter
+let jobCount = 2341;
+setInterval(() => {
+  jobCount += Math.floor(Math.random() * 3);
+  const el = document.getElementById('jobs-counter');
+  if (el) el.textContent = jobCount.toLocaleString();
+}, 4000);
+
+// Log rotation
+const logLines = [
+  ['ok',   'estimate job completed // 284ms'],
+  ['info', 'stripe webhook verified // $5.46'],
+  ['ok',   'FL DMV lien filed // cert mail dispatched'],
+  ['info', 'vram scavenger // 68.4% utilized'],
+  ['ok',   'cpo badge issued // VIN 5YJSA1E26H...'],
+  ['info', 'celery workers 4/4 online'],
+  ['ok',   'api_costs row written // job 9f3a'],
+  ['warn', 'audit queue depth: 14 — spawning worker'],
+  ['ok',   'qdrant index updated // 1,842 tokens'],
+  ['info', 'motor api cache hit // 2022 Camry parts'],
+];
+
+let logIdx = 0;
+const logEls = ['hero-log-1','hero-log-2','hero-log-3','hero-log-4'];
+setInterval(() => {
+  const el = document.getElementById(logEls[logIdx % logEls.length]);
+  if (!el) return;
+  const entry = logLines[logIdx % logLines.length];
+  const cls = entry[0] === 'ok' ? 'log-ok' : entry[0] === 'warn' ? 'log-warn' : 'log-info';
+  el.innerHTML = `<span class="${cls}">[${entry[0].toUpperCase()}]</span> ${entry[1]}`;
+  logIdx++;
+}, 2500);
+
+// Intersection observer for fade-in on scroll
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      e.target.style.opacity = '1';
+      e.target.style.transform = 'translateY(0)';
+    }
+  });
+}, { threshold: 0.1 });
+
+document.querySelectorAll('.office-card, .pricing-card, .promise-item, .bilingual-col').forEach(el => {
+  el.style.opacity = '0';
+  el.style.transform = 'translateY(20px)';
+  el.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+  observer.observe(el);
+});
+</script>
+</body>
+</html>

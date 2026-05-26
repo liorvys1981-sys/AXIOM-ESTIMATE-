@@ -1,0 +1,447 @@
+"""
+AXIOM — Qdrant Vector Store Integration
+Provides:
+  - EstimateVectorStore: index and search compiled estimates by embedding
+  - PartsVectorStore: semantic parts catalog search
+  - FraudDetector: near-duplicate claim detection via cosine similarity
+  - VectorIndexer: Celery task-level helper that writes to api_costs after indexing
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from dataclasses import dataclass
+from typing import Any
+from uuid import UUID
+
+import httpx
+import structlog
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+log = structlog.get_logger("axiom.qdrant")
+
+QDRANT_HOST       = os.getenv("QDRANT_HOST", "axiom-qdrant")
+QDRANT_PORT       = int(os.getenv("QDRANT_PORT", "6333"))
+QDRANT_API_KEY    = os.getenv("QDRANT_API_KEY", "")
+QDRANT_BASE       = f"http://{QDRANT_HOST}:{QDRANT_PORT}"
+
+COLLECTION_ESTIMATES = os.getenv("QDRANT_COLLECTION_ESTIMATES", "estimate_vectors")
+COLLECTION_PARTS     = os.getenv("QDRANT_COLLECTION_PARTS",     "parts_catalog_vectors")
+VECTOR_SIZE          = int(os.getenv("QDRANT_VECTOR_SIZE",      "1536"))   # OpenAI text-embedding-3-small
+
+OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY", "")
+EMBED_MODEL       = "text-embedding-3-small"
+FRAUD_THRESHOLD   = 0.97    # cosine similarity above this = likely duplicate
+
+
+# ─────────────────────────────────────────────
+# Embedding helper (OpenAI)
+# ─────────────────────────────────────────────
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+async def embed_text(text: str, client: httpx.AsyncClient) -> list[float]:
+    """
+    Call OpenAI embeddings endpoint and return a 1536-dim float vector.
+    Tracks token usage for api_costs logging.
+    """
+    resp = await client.post(
+        "https://api.openai.com/v1/embeddings",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={"model": EMBED_MODEL, "input": text},
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data["data"][0]["embedding"]
+
+
+def estimate_to_text(estimate_payload: dict[str, Any]) -> str:
+    """
+    Convert a compiled estimate payload to a canonical text string
+    suitable for embedding. Captures structural damage profile,
+    make/model/year, part categories, and total range.
+    """
+    parts = estimate_payload.get("parts", [])
+    labor = estimate_payload.get("labor", [])
+
+    parts_desc  = ", ".join(p.get("description", "") for p in parts[:20])
+    labor_desc  = ", ".join(op.get("description", "") for op in labor[:10])
+    vehicle     = estimate_payload.get("vehicle", {})
+
+    return (
+        f"{vehicle.get('year', '')} {vehicle.get('make', '')} {vehicle.get('model', '')} "
+        f"{vehicle.get('trim', '')} | "
+        f"Parts: {parts_desc} | "
+        f"Labor: {labor_desc} | "
+        f"Total: ${estimate_payload.get('total_estimate', '0')}"
+    )
+
+
+# ─────────────────────────────────────────────
+# Low-level Qdrant REST client
+# ─────────────────────────────────────────────
+
+class QdrantClient:
+    def __init__(self):
+        self._http = httpx.AsyncClient(
+            base_url=QDRANT_BASE,
+            headers={
+                "api-key":      QDRANT_API_KEY,
+                "Content-Type": "application/json",
+            },
+            timeout=httpx.Timeout(15.0),
+        )
+
+    async def close(self) -> None:
+        await self._http.aclose()
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=6), reraise=True)
+    async def ensure_collection(self, name: str, vector_size: int = VECTOR_SIZE) -> None:
+        """Create collection if it doesn't already exist."""
+        check = await self._http.get(f"/collections/{name}")
+        if check.status_code == 200:
+            return
+        resp = await self._http.put(
+            f"/collections/{name}",
+            json={
+                "vectors": {
+                    "size":     vector_size,
+                    "distance": "Cosine",
+                },
+                "optimizers_config": {
+                    "default_segment_number": 2,
+                },
+                "replication_factor": 2,
+            },
+        )
+        resp.raise_for_status()
+        log.info("qdrant_collection_created", name=name)
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=6), reraise=True)
+    async def upsert(
+        self,
+        collection: str,
+        point_id: str,
+        vector: list[float],
+        payload: dict[str, Any],
+    ) -> None:
+        resp = await self._http.put(
+            f"/collections/{collection}/points",
+            json={
+                "points": [
+                    {
+                        "id":      point_id,
+                        "vector":  vector,
+                        "payload": payload,
+                    }
+                ]
+            },
+        )
+        resp.raise_for_status()
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=6), reraise=True)
+    async def search(
+        self,
+        collection: str,
+        vector: list[float],
+        limit: int = 10,
+        score_threshold: float = 0.70,
+        filter_payload: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        body: dict[str, Any] = {
+            "vector":          vector,
+            "limit":           limit,
+            "with_payload":    True,
+            "score_threshold": score_threshold,
+        }
+        if filter_payload:
+            body["filter"] = filter_payload
+
+        resp = await self._http.post(
+            f"/collections/{collection}/points/search",
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json().get("result", [])
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=6), reraise=True)
+    async def delete_point(self, collection: str, point_id: str) -> None:
+        resp = await self._http.post(
+            f"/collections/{collection}/points/delete",
+            json={"points": [point_id]},
+        )
+        resp.raise_for_status()
+
+
+# ─────────────────────────────────────────────
+# Estimate Vector Store
+# ─────────────────────────────────────────────
+
+@dataclass
+class SimilarEstimate:
+    job_id:        str
+    shop_id:       str
+    vin:           str
+    score:         float
+    total_estimate: str
+    vehicle_desc:  str
+
+
+class EstimateVectorStore:
+    """
+    Index completed estimates for:
+      1. Semantic similarity search ("find estimates similar to this damage profile")
+      2. Pricing benchmarking ("is this estimate within market range?")
+      3. Fraud detection (near-duplicate VIN + damage profile = possible re-submission)
+    """
+
+    def __init__(self, qdrant: QdrantClient, embed_client: httpx.AsyncClient):
+        self._q = qdrant
+        self._embed = embed_client
+
+    async def init(self) -> None:
+        await self._q.ensure_collection(COLLECTION_ESTIMATES)
+
+    async def index_estimate(
+        self,
+        job_id: UUID,
+        shop_id: UUID,
+        vin: str,
+        estimate_payload: dict[str, Any],
+    ) -> int:
+        """
+        Embed and store an estimate. Returns token count used for api_costs.
+        """
+        text = estimate_to_text(estimate_payload)
+        vector = await embed_text(text, self._embed)
+
+        point_id = hashlib.md5(str(job_id).encode()).hexdigest()
+
+        await self._q.upsert(
+            collection=COLLECTION_ESTIMATES,
+            point_id=point_id,
+            vector=vector,
+            payload={
+                "job_id":         str(job_id),
+                "shop_id":        str(shop_id),
+                "vin":            vin,
+                "total_estimate": str(estimate_payload.get("total_estimate", "0")),
+                "make":           estimate_payload.get("vehicle", {}).get("make", ""),
+                "model":          estimate_payload.get("vehicle", {}).get("model", ""),
+                "year":           estimate_payload.get("vehicle", {}).get("year"),
+                "is_total_loss":  estimate_payload.get("is_total_loss", False),
+            },
+        )
+        # Rough token estimate: 1 token ≈ 4 chars
+        token_count = len(text) // 4
+        log.info("estimate_indexed", job_id=str(job_id), tokens=token_count)
+        return token_count
+
+    async def find_similar(
+        self,
+        estimate_payload: dict[str, Any],
+        limit: int = 5,
+        min_score: float = 0.80,
+    ) -> list[SimilarEstimate]:
+        """
+        Find the top-N most similar historical estimates by damage profile.
+        Useful for pricing benchmarking and supplement negotiation.
+        """
+        text   = estimate_to_text(estimate_payload)
+        vector = await embed_text(text, self._embed)
+        results = await self._q.search(
+            COLLECTION_ESTIMATES, vector, limit=limit, score_threshold=min_score
+        )
+        return [
+            SimilarEstimate(
+                job_id         = r["payload"].get("job_id", ""),
+                shop_id        = r["payload"].get("shop_id", ""),
+                vin            = r["payload"].get("vin", ""),
+                score          = r["score"],
+                total_estimate = r["payload"].get("total_estimate", ""),
+                vehicle_desc   = f"{r['payload'].get('year','')} {r['payload'].get('make','')} {r['payload'].get('model','')}",
+            )
+            for r in results
+        ]
+
+
+# ─────────────────────────────────────────────
+# Parts Catalog Vector Store
+# ─────────────────────────────────────────────
+
+@dataclass
+class PartMatch:
+    part_number:  str
+    description:  str
+    msrp:         str
+    score:        float
+    source:       str
+
+
+class PartsVectorStore:
+    """
+    Semantic parts catalog search.
+    Allows natural-language queries like "front bumper cover 2022 Camry"
+    to return ranked OEM part matches with pricing.
+    """
+
+    def __init__(self, qdrant: QdrantClient, embed_client: httpx.AsyncClient):
+        self._q = qdrant
+        self._embed = embed_client
+
+    async def init(self) -> None:
+        await self._q.ensure_collection(COLLECTION_PARTS)
+
+    async def index_part(self, part: dict[str, Any]) -> None:
+        text = f"{part['description']} {part.get('make','')} {part.get('model','')} {part.get('year','')} part number {part['part_number']}"
+        vector = await embed_text(text, self._embed)
+        point_id = hashlib.md5(part["part_number"].encode()).hexdigest()
+        await self._q.upsert(
+            COLLECTION_PARTS,
+            point_id=point_id,
+            vector=vector,
+            payload={
+                "part_number": part["part_number"],
+                "description": part["description"],
+                "msrp":        str(part.get("msrp", "0")),
+                "list_price":  str(part.get("list_price", "0")),
+                "source":      part.get("source", "MOTOR"),
+                "make":        part.get("make", ""),
+                "model":       part.get("model", ""),
+                "year":        part.get("year"),
+            },
+        )
+
+    async def search_parts(self, query: str, limit: int = 8) -> list[PartMatch]:
+        vector = await embed_text(query, self._embed)
+        results = await self._q.search(
+            COLLECTION_PARTS, vector, limit=limit, score_threshold=0.75
+        )
+        return [
+            PartMatch(
+                part_number = r["payload"].get("part_number", ""),
+                description = r["payload"].get("description", ""),
+                msrp        = r["payload"].get("msrp", ""),
+                score       = r["score"],
+                source      = r["payload"].get("source", ""),
+            )
+            for r in results
+        ]
+
+
+# ─────────────────────────────────────────────
+# Fraud Detector
+# ─────────────────────────────────────────────
+
+@dataclass
+class FraudFlag:
+    duplicate_job_id:   str
+    duplicate_shop_id:  str
+    duplicate_vin:      str
+    similarity_score:   float
+    alert_message:      str
+
+
+class FraudDetector:
+    """
+    Detects near-duplicate estimate submissions that may represent
+    fraudulent re-submissions of the same claim across shops.
+    Uses FRAUD_THRESHOLD (default 0.97) cosine similarity.
+    """
+
+    def __init__(self, estimate_store: EstimateVectorStore):
+        self._store = estimate_store
+
+    async def check_for_duplicates(
+        self,
+        vin: str,
+        estimate_payload: dict[str, Any],
+        current_shop_id: UUID,
+    ) -> list[FraudFlag]:
+        """
+        Returns a list of FraudFlag if near-identical estimates already
+        exist for this VIN. Empty list = clean.
+        """
+        similar = await self._store.find_similar(
+            estimate_payload,
+            limit=5,
+            min_score=FRAUD_THRESHOLD,
+        )
+
+        flags: list[FraudFlag] = []
+        for match in similar:
+            if match.vin == vin and match.shop_id != str(current_shop_id):
+                flags.append(FraudFlag(
+                    duplicate_job_id  = match.job_id,
+                    duplicate_shop_id = match.shop_id,
+                    duplicate_vin     = match.vin,
+                    similarity_score  = match.score,
+                    alert_message     = (
+                        f"HIGH FRAUD RISK: VIN {vin} submitted with {match.score:.3f} "
+                        f"similarity to job {match.job_id} from a different shop. "
+                        "Manual review required before processing."
+                    ),
+                ))
+                log.warning(
+                    "fraud_flag_raised",
+                    vin=vin,
+                    similarity=match.score,
+                    duplicate_job=match.job_id,
+                )
+
+        return flags
+
+
+# ─────────────────────────────────────────────
+# Celery task helper — writes api_costs after indexing
+# ─────────────────────────────────────────────
+
+async def index_and_cost(
+    *,
+    job_id: UUID,
+    shop_id: UUID,
+    vin: str,
+    estimate_payload: dict[str, Any],
+    store: EstimateVectorStore,
+    session: Any,   # AsyncSession injected by caller
+) -> None:
+    """
+    Index an estimate and immediately write the embedding cost
+    to the api_costs table. Called at the tail of every estimate Celery task.
+    """
+    import time
+    from axiom.models import ApiCost
+
+    t0 = time.perf_counter()
+    token_count = await store.index_estimate(job_id, shop_id, vin, estimate_payload)
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+
+    # text-embedding-3-small: $0.02 per 1M tokens
+    embedding_cost = round(token_count / 1_000_000 * 0.02, 8)
+
+    cost_row = ApiCost(
+        job_id              = job_id,
+        shop_id             = shop_id,
+        llm_tokens_input    = token_count,
+        llm_tokens_output   = 0,
+        llm_tokens_cost     = embedding_cost,
+        vision_calls        = 0,
+        vision_cost         = 0,
+        gpu_compute_cost    = 0,
+        gpu_seconds         = 0,
+        vram_gb_seconds     = 0,
+        total_platform_cost = embedding_cost,
+        billed_to_client    = False,
+    )
+    session.add(cost_row)
+    await session.commit()
+
+    log.info(
+        "vector_index_cost_logged",
+        job_id    = str(job_id),
+        tokens    = token_count,
+        cost_usd  = embedding_cost,
+        elapsed_ms= elapsed_ms,
+    )

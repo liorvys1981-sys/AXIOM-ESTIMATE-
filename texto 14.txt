@@ -1,0 +1,489 @@
+"""
+AXIOM — MOTOR Information Systems API Integration
++ CIECA BMS (Body Management Standard) Serializer
+
+Provides:
+  - MotorClient: async HTTPX client for MOTOR API v2
+  - PartLookup, LaborLookup, PaintLookup: typed response models
+  - CiecaBmsSerializer: compiles estimate data into CIECA BMS 2026.1 JSON/XML
+  - EstimateCompiler: orchestrates MOTOR lookups → compliance output
+
+MOTOR API contract required: https://www.motor.com/
+CIECA membership required for carrier EDI submission: https://www.cieca.com/
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any
+from uuid import UUID
+import xml.etree.ElementTree as ET
+
+import httpx
+from pydantic import BaseModel, Field
+from tenacity import retry, stop_after_attempt, wait_exponential
+import structlog
+
+log = structlog.get_logger("axiom.motor")
+
+MOTOR_API_BASE   = os.getenv("MOTOR_API_BASE", "https://api.motor.com/v2")
+MOTOR_API_KEY    = os.getenv("MOTOR_API_KEY", "")
+MOTOR_TIMEOUT    = int(os.getenv("MOTOR_TIMEOUT_SECS", "10"))
+MOTOR_CACHE_TTL  = int(os.getenv("MOTOR_CACHE_TTL_SECS", "86400"))
+
+CIECA_VERSION    = os.getenv("CIECA_BMS_VERSION", "2026.1")
+FL_LABOR_RATE    = Decimal(os.getenv("FL_DEFAULT_LABOR_RATE", "62.00"))
+FL_TL_THRESHOLD  = Decimal(os.getenv("FL_TOTAL_LOSS_THRESHOLD", "0.75"))
+
+
+# ─────────────────────────────────────────────
+# Pydantic models — MOTOR API responses
+# ─────────────────────────────────────────────
+
+class OemPart(BaseModel):
+    part_number:    str
+    description:    str
+    msrp:           Decimal
+    list_price:     Decimal
+    superseded_by:  str | None = None
+    is_oem:         bool = True
+    source:         str = "MOTOR"
+
+class LaborOperation(BaseModel):
+    operation_code:   str
+    description:      str
+    base_hours:       Decimal
+    overlap_hours:    Decimal = Decimal("0")
+    net_hours:        Decimal
+    skill_level:      str = "B"          # A = structural, B = mechanical, C = refinish
+    oem_procedure_id: str | None = None
+
+class PaintTime(BaseModel):
+    panel:           str
+    refinish_hours:  Decimal
+    blend_hours:     Decimal = Decimal("0")
+    color_type:      str = "BC/CC"       # basecoat/clearcoat
+
+class VehicleConfig(BaseModel):
+    vin:             str
+    year:            int
+    make:            str
+    model:           str
+    trim:            str
+    engine:          str
+    body_style:      str
+    country_of_mfg:  str = "USA"
+
+class ZipCodeLaborRate(BaseModel):
+    zip_code:       str
+    state:          str
+    labor_rate:     Decimal
+    effective_date: str
+
+
+# ─────────────────────────────────────────────
+# MOTOR HTTP client
+# ─────────────────────────────────────────────
+
+class MotorClient:
+    """
+    Async HTTPX client for MOTOR Information Systems API v2.
+    All endpoints are cached in Redis (injected as `cache`) using a
+    content-addressed key so stale OEM data never bleeds across model years.
+    """
+
+    def __init__(self, cache: Any = None):
+        self._http = httpx.AsyncClient(
+            base_url=MOTOR_API_BASE,
+            headers={
+                "Authorization": f"Bearer {MOTOR_API_KEY}",
+                "Content-Type":  "application/json",
+                "Accept":        "application/json",
+                "User-Agent":    "AXIOM-Estimate/1.1.0",
+            },
+            timeout=httpx.Timeout(MOTOR_TIMEOUT),
+        )
+        self._cache = cache     # optional redis client for response caching
+
+    def _cache_key(self, endpoint: str, params: dict[str, Any]) -> str:
+        raw = endpoint + json.dumps(params, sort_keys=True)
+        return "motor:" + hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+    async def _get_cached(self, endpoint: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        if not self._cache:
+            return None
+        key = self._cache_key(endpoint, params)
+        try:
+            val = await self._cache.get(key)
+            if val:
+                return json.loads(val)
+        except Exception:
+            pass
+        return None
+
+    async def _set_cached(self, endpoint: str, params: dict[str, Any], data: dict[str, Any]) -> None:
+        if not self._cache:
+            return
+        key = self._cache_key(endpoint, params)
+        try:
+            await self._cache.setex(key, MOTOR_CACHE_TTL, json.dumps(data))
+        except Exception:
+            pass
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+    async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        cached = await self._get_cached(path, params)
+        if cached:
+            log.debug("motor_cache_hit", path=path)
+            return cached
+        resp = await self._http.get(path, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        await self._set_cached(path, params, data)
+        log.info("motor_api_call", path=path, status=resp.status_code)
+        return data
+
+    async def decode_vin(self, vin: str) -> VehicleConfig:
+        data = await self._get("/vehicles/vin", {"vin": vin})
+        return VehicleConfig(**data["vehicle"])
+
+    async def get_parts(self, vin: str, damage_zones: list[str]) -> list[OemPart]:
+        data = await self._get("/parts/estimate", {"vin": vin, "zones": ",".join(damage_zones)})
+        return [OemPart(**p) for p in data.get("parts", [])]
+
+    async def get_labor(self, vin: str, operation_codes: list[str]) -> list[LaborOperation]:
+        data = await self._get("/labor/operations", {"vin": vin, "ops": ",".join(operation_codes)})
+        ops = [LaborOperation(**o) for o in data.get("operations", [])]
+        # Apply overlap deductions per MOTOR guidelines
+        return _apply_overlap_deductions(ops)
+
+    async def get_paint_times(self, vin: str, panels: list[str]) -> list[PaintTime]:
+        data = await self._get("/refinish/times", {"vin": vin, "panels": ",".join(panels)})
+        return [PaintTime(**p) for p in data.get("paint_times", [])]
+
+    async def get_labor_rate(self, zip_code: str) -> ZipCodeLaborRate:
+        data = await self._get("/rates/labor", {"zip": zip_code, "state": "FL"})
+        return ZipCodeLaborRate(**data)
+
+    async def close(self) -> None:
+        await self._http.aclose()
+
+
+def _apply_overlap_deductions(ops: list[LaborOperation]) -> list[LaborOperation]:
+    """
+    MOTOR overlap deduction rules: when multiple operations share structural
+    access, the overlap hours are deducted from the lower-priority operation.
+    Returns a new list with net_hours recomputed.
+    """
+    # Group by skill level; structural (A) deducts from mechanical (B)
+    adjusted = []
+    for op in ops:
+        net = op.base_hours - op.overlap_hours
+        adjusted.append(op.model_copy(update={"net_hours": max(Decimal("0"), net)}))
+    return adjusted
+
+
+# ─────────────────────────────────────────────
+# Compiled Estimate (intermediate model)
+# ─────────────────────────────────────────────
+
+class CompiledEstimate(BaseModel):
+    job_id:           UUID
+    shop_id:          UUID
+    vin:              str
+    vehicle:          VehicleConfig
+    parts:            list[OemPart]
+    labor:            list[LaborOperation]
+    paint:            list[PaintTime]
+    zip_code:         str
+    labor_rate:       Decimal
+    # Computed totals
+    total_parts:      Decimal = Decimal("0")
+    total_labor_cost: Decimal = Decimal("0")
+    total_paint_cost: Decimal = Decimal("0")
+    total_estimate:   Decimal = Decimal("0")
+    acv:              Decimal | None = None
+    loss_ratio:       Decimal | None = None
+    is_total_loss:    bool = False
+    compiled_at:      str = ""
+
+    def compute_totals(self) -> "CompiledEstimate":
+        parts_cost = sum(p.list_price for p in self.parts)
+        labor_hours = sum(op.net_hours for op in self.labor)
+        paint_hours = sum(pt.refinish_hours + pt.blend_hours for pt in self.paint)
+        labor_cost  = labor_hours * self.labor_rate
+        paint_cost  = paint_hours * self.labor_rate   # paint uses same labor rate in FL
+
+        total = parts_cost + labor_cost + paint_cost
+
+        loss_ratio = None
+        is_tl = False
+        if self.acv and self.acv > 0:
+            loss_ratio = (total / self.acv).quantize(Decimal("0.0001"))
+            is_tl = loss_ratio >= FL_TL_THRESHOLD
+
+        return self.model_copy(update={
+            "total_parts":       parts_cost.quantize(Decimal("0.01")),
+            "total_labor_cost":  labor_cost.quantize(Decimal("0.01")),
+            "total_paint_cost":  paint_cost.quantize(Decimal("0.01")),
+            "total_estimate":    total.quantize(Decimal("0.01")),
+            "loss_ratio":        loss_ratio,
+            "is_total_loss":     is_tl,
+            "compiled_at":       datetime.now(timezone.utc).isoformat(),
+        })
+
+
+# ─────────────────────────────────────────────
+# Estimate Compiler (orchestrator)
+# ─────────────────────────────────────────────
+
+class EstimateCompiler:
+    """
+    Orchestrates MOTOR API calls to produce a fully compiled estimate
+    from a list of AI-detected damage zones.
+    """
+
+    def __init__(self, motor: MotorClient):
+        self.motor = motor
+
+    async def compile(
+        self,
+        *,
+        job_id: UUID,
+        shop_id: UUID,
+        vin: str,
+        zip_code: str,
+        damage_zones: list[str],
+        operation_codes: list[str],
+        panels_to_refinish: list[str],
+        acv: Decimal | None = None,
+    ) -> CompiledEstimate:
+        """
+        Full compilation pipeline:
+          1. Decode VIN
+          2. Fetch OEM parts for damage zones
+          3. Fetch labor operations with overlap deductions
+          4. Fetch paint/refinish times
+          5. Fetch localized labor rate by zip
+          6. Compute totals + FL total-loss determination
+        """
+        vehicle, parts, labor, paint, rate_data = await asyncio.gather(
+            self.motor.decode_vin(vin),
+            self.motor.get_parts(vin, damage_zones),
+            self.motor.get_labor(vin, operation_codes),
+            self.motor.get_paint_times(vin, panels_to_refinish),
+            self.motor.get_labor_rate(zip_code),
+        )
+
+        estimate = CompiledEstimate(
+            job_id=job_id,
+            shop_id=shop_id,
+            vin=vin,
+            vehicle=vehicle,
+            parts=parts,
+            labor=labor,
+            paint=paint,
+            zip_code=zip_code,
+            labor_rate=rate_data.labor_rate,
+            acv=acv,
+        )
+        return estimate.compute_totals()
+
+
+# Need asyncio for gather
+import asyncio
+
+
+# ─────────────────────────────────────────────
+# CIECA BMS Serializer
+# ─────────────────────────────────────────────
+
+class CiecaBmsSerializer:
+    """
+    Compiles a CompiledEstimate into a CIECA BMS 2026.1 compliant
+    document in both JSON and XML formats for carrier portal ingestion.
+
+    CIECA BMS reference: https://www.cieca.com/standards
+    """
+
+    @staticmethod
+    def to_json(estimate: CompiledEstimate, carrier_code: str, claim_number: str) -> dict[str, Any]:
+        """Produce a CIECA BMS 2026.1 JSON document."""
+        return {
+            "CIECA_BMS_Document": {
+                "Header": {
+                    "TransactionType":   "EstimateSubmission",
+                    "StandardVersion":   CIECA_VERSION,
+                    "DocumentID":        str(estimate.job_id),
+                    "CreatedAt":         estimate.compiled_at,
+                    "OriginatorID":      str(estimate.shop_id),
+                    "RecipientID":       carrier_code,
+                    "ClaimNumber":       claim_number,
+                    "Jurisdiction":      "FL",
+                },
+                "VehicleInfo": {
+                    "VIN":               estimate.vin,
+                    "Year":              estimate.vehicle.year,
+                    "Make":              estimate.vehicle.make,
+                    "Model":             estimate.vehicle.model,
+                    "Trim":              estimate.vehicle.trim,
+                    "Engine":            estimate.vehicle.engine,
+                    "BodyStyle":         estimate.vehicle.body_style,
+                },
+                "LaborRates": {
+                    "BodyLaborRate":     str(estimate.labor_rate),
+                    "MechanicalRate":    str(estimate.labor_rate),
+                    "RefinishRate":      str(estimate.labor_rate),
+                    "ZipCode":           estimate.zip_code,
+                    "State":             "FL",
+                },
+                "LineItems": {
+                    "Parts": [
+                        {
+                            "LineNo":       i + 1,
+                            "PartNumber":   p.part_number,
+                            "Description":  p.description,
+                            "ListPrice":    str(p.list_price),
+                            "MSRP":         str(p.msrp),
+                            "IsOEM":        p.is_oem,
+                            "Source":       p.source,
+                        }
+                        for i, p in enumerate(estimate.parts)
+                    ],
+                    "Labor": [
+                        {
+                            "LineNo":         i + 1,
+                            "OperationCode":  op.operation_code,
+                            "Description":    op.description,
+                            "BaseHours":      str(op.base_hours),
+                            "OverlapHours":   str(op.overlap_hours),
+                            "NetHours":       str(op.net_hours),
+                            "SkillLevel":     op.skill_level,
+                            "OemProcedureID": op.oem_procedure_id,
+                        }
+                        for i, op in enumerate(estimate.labor)
+                    ],
+                    "Refinish": [
+                        {
+                            "LineNo":        i + 1,
+                            "Panel":         pt.panel,
+                            "RefinishHours": str(pt.refinish_hours),
+                            "BlendHours":    str(pt.blend_hours),
+                            "ColorType":     pt.color_type,
+                        }
+                        for i, pt in enumerate(estimate.paint)
+                    ],
+                },
+                "Totals": {
+                    "TotalOemPartsCost":      str(estimate.total_parts),
+                    "TotalLaborHours":        str(sum(op.net_hours for op in estimate.labor)),
+                    "TotalLaborCost":         str(estimate.total_labor_cost),
+                    "TotalRefinishCost":      str(estimate.total_paint_cost),
+                    "GrandTotal":             str(estimate.total_estimate),
+                },
+                "TotalLossAnalysis": {
+                    "ActualCashValue":        str(estimate.acv) if estimate.acv else None,
+                    "LossRatio":              str(estimate.loss_ratio) if estimate.loss_ratio else None,
+                    "FloridaThreshold":       str(FL_TL_THRESHOLD),
+                    "IsTotalLoss":            estimate.is_total_loss,
+                    "StatuteReference":       "FL §627.7405",
+                },
+                "PlatformTransaction": {
+                    "AxiomJobID":             str(estimate.job_id),
+                    "BillingService":         "estimate",
+                    "NetUSD":                 "5.00",
+                    "AbsorbedFeeUSD":         "0.46",
+                    "ChargedUSD":             "5.46",
+                },
+            }
+        }
+
+    @staticmethod
+    def to_xml(estimate: CompiledEstimate, carrier_code: str, claim_number: str) -> str:
+        """Produce a CIECA BMS 2026.1 XML document as a string."""
+        root = ET.Element("CIECA_BMS_Document",
+                          version=CIECA_VERSION,
+                          xmlns="http://www.cieca.com/bms/2026")
+
+        # Header
+        hdr = ET.SubElement(root, "Header")
+        ET.SubElement(hdr, "TransactionType").text = "EstimateSubmission"
+        ET.SubElement(hdr, "StandardVersion").text  = CIECA_VERSION
+        ET.SubElement(hdr, "DocumentID").text        = str(estimate.job_id)
+        ET.SubElement(hdr, "CreatedAt").text          = estimate.compiled_at
+        ET.SubElement(hdr, "OriginatorID").text       = str(estimate.shop_id)
+        ET.SubElement(hdr, "RecipientID").text        = carrier_code
+        ET.SubElement(hdr, "ClaimNumber").text        = claim_number
+        ET.SubElement(hdr, "Jurisdiction").text       = "FL"
+
+        # VehicleInfo
+        vi = ET.SubElement(root, "VehicleInfo")
+        for tag, val in [
+            ("VIN", estimate.vin),
+            ("Year", str(estimate.vehicle.year)),
+            ("Make", estimate.vehicle.make),
+            ("Model", estimate.vehicle.model),
+            ("Trim", estimate.vehicle.trim),
+        ]:
+            ET.SubElement(vi, tag).text = val
+
+        # Totals
+        totals = ET.SubElement(root, "Totals")
+        ET.SubElement(totals, "TotalOemPartsCost").text  = str(estimate.total_parts)
+        ET.SubElement(totals, "TotalLaborCost").text     = str(estimate.total_labor_cost)
+        ET.SubElement(totals, "TotalRefinishCost").text  = str(estimate.total_paint_cost)
+        ET.SubElement(totals, "GrandTotal").text         = str(estimate.total_estimate)
+
+        # TotalLossAnalysis
+        tla = ET.SubElement(root, "TotalLossAnalysis")
+        ET.SubElement(tla, "LossRatio").text    = str(estimate.loss_ratio or "N/A")
+        ET.SubElement(tla, "IsTotalLoss").text  = str(estimate.is_total_loss).lower()
+        ET.SubElement(tla, "Statute").text      = "FL §627.7405"
+
+        ET.indent(root, space="  ")
+        return ET.tostring(root, encoding="unicode", xml_declaration=False)
+
+    @staticmethod
+    def validate_carrier_compliance(
+        estimate: CompiledEstimate,
+        carrier_code: str,
+    ) -> list[dict[str, str]]:
+        """
+        Run carrier-specific compliance checks.
+        Returns a list of flag dicts: [{code, severity, description, resolved}]
+        """
+        flags: list[dict[str, str]] = []
+
+        # FL labor rate check — most carriers cap at ~$62/hr
+        if estimate.labor_rate > Decimal("65.00"):
+            flags.append({
+                "code":        "LABOR_RATE_EXCESS",
+                "severity":    "warning",
+                "description": f"Labor rate ${estimate.labor_rate}/hr exceeds FL carrier guideline max $65.00/hr",
+                "resolved":    "false",
+            })
+
+        # OEM parts only check for some carriers
+        non_oem = [p for p in estimate.parts if not p.is_oem]
+        if carrier_code in ("ALLSTATE", "STATE_FARM") and non_oem:
+            flags.append({
+                "code":        "NON_OEM_PARTS",
+                "severity":    "error",
+                "description": f"{len(non_oem)} non-OEM parts in estimate — carrier requires OEM only",
+                "resolved":    "false",
+            })
+
+        # Total loss threshold advisory
+        if estimate.loss_ratio and estimate.loss_ratio > Decimal("0.65") and not estimate.is_total_loss:
+            flags.append({
+                "code":        "NEAR_TOTAL_LOSS",
+                "severity":    "advisory",
+                "description": f"Loss ratio {float(estimate.loss_ratio):.1%} approaching FL 75% threshold",
+                "resolved":    "false",
+            })
+
+        return flags

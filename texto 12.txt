@@ -1,0 +1,283 @@
+---
+# ============================================================
+# AXIOM Celery GPU Worker — Deployment
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: axiom-worker
+  namespace: axiom
+  labels:
+    app: axiom-worker
+    component: worker
+    version: "1.1.0"
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: axiom-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: axiom-worker
+        component: worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "9090"
+        prometheus.io/path:   "/metrics"
+    spec:
+      serviceAccountName: axiom-worker
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: axiom-registry-creds
+      # Only schedule on nodes that have GPU resources
+      nodeSelector:
+        accelerator: nvidia-gpu
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: registry.example.com/axiom-api:1.1.0
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - axiom.agent_core
+            - worker
+            - --loglevel=info
+            - --concurrency=4
+            - --queues=celery,estimate,claims,total_loss,lien,audit,cpo,gpu_resell
+            - --without-gossip
+            - --without-mingle
+            - --max-tasks-per-child=100
+          envFrom:
+            - configMapRef:
+                name: axiom-config
+            - secretRef:
+                name: axiom-core
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: "compute,utility,video"
+          resources:
+            requests:
+              cpu:             "1000m"
+              memory:          "4Gi"
+              nvidia.com/gpu:  "1"
+            limits:
+              cpu:             "4000m"
+              memory:          "8Gi"
+              nvidia.com/gpu:  "1"
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - axiom.agent_core
+                - inspect
+                - ping
+                - --timeout=5
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: model-cache
+              mountPath: /app/.cache/models
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: model-cache
+          emptyDir:
+            medium: Memory
+            sizeLimit: "2Gi"
+      terminationGracePeriodSeconds: 120    # allow in-flight tasks to complete
+
+---
+# ============================================================
+# Celery Worker — HPA (scales on custom queue depth metric)
+# Requires: keda or prometheus-adapter for custom metrics
+# ============================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: axiom-worker-hpa
+  namespace: axiom
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: axiom-worker
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 600     # workers are expensive — don't scale down fast
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 180
+
+---
+# ============================================================
+# Celery Beat Scheduler — single replica, no HPA
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: axiom-beat
+  namespace: axiom
+  labels:
+    app: axiom-beat
+    component: scheduler
+spec:
+  replicas: 1              # Beat MUST be a singleton
+  selector:
+    matchLabels:
+      app: axiom-beat
+  template:
+    metadata:
+      labels:
+        app: axiom-beat
+    spec:
+      serviceAccountName: axiom-worker
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: axiom-registry-creds
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: beat
+          image: registry.example.com/axiom-api:1.1.0
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - axiom.agent_core
+            - beat
+            - --loglevel=info
+          envFrom:
+            - configMapRef:
+                name: axiom-config
+            - secretRef:
+                name: axiom-core
+          resources:
+            requests:
+              cpu:    "50m"
+              memory: "128Mi"
+            limits:
+              cpu:    "200m"
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+# ============================================================
+# Self-Healing Watchdog — Deployment
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: axiom-watchdog
+  namespace: axiom
+  labels:
+    app: axiom-watchdog
+    component: watchdog
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: axiom-watchdog
+  template:
+    metadata:
+      labels:
+        app: axiom-watchdog
+    spec:
+      serviceAccountName: axiom-watchdog
+      automountServiceAccountToken: true   # needs to query K8s pod API
+      imagePullSecrets:
+        - name: axiom-registry-creds
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: watchdog
+          image: registry.example.com/axiom-api:1.1.0
+          imagePullPolicy: Always
+          command: ["python3", "-m", "axiom.self_healing"]
+          envFrom:
+            - configMapRef:
+                name: axiom-config
+            - secretRef:
+                name: axiom-core
+          resources:
+            requests:
+              cpu:    "50m"
+              memory: "128Mi"
+            limits:
+              cpu:    "200m"
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

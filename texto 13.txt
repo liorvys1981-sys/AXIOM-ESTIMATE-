@@ -1,0 +1,247 @@
+---
+# ============================================================
+# cert-manager — ClusterIssuer (Let's Encrypt production)
+# ============================================================
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-production
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: devops@axiomestimate.com
+    privateKeySecretRef:
+      name: letsencrypt-production-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx
+
+---
+# Staging issuer for testing cert pipeline without rate-limit risk
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: devops@axiomestimate.com
+    privateKeySecretRef:
+      name: letsencrypt-staging-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx
+
+---
+# ============================================================
+# Nginx rate-limit ConfigMap
+# Applied via nginx.ingress.kubernetes.io/limit-* annotations
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: axiom-nginx-config
+  namespace: axiom
+data:
+  # Global nginx settings injected via helm values on the ingress controller
+  # These are documented here for visibility; apply via bitnami/nginx-ingress-controller values
+  proxy-body-size:          "30m"       # allow large image uploads
+  proxy-read-timeout:       "120"
+  proxy-send-timeout:       "120"
+  proxy-connect-timeout:    "10"
+  upstream-keepalive-connections: "100"
+  keep-alive:               "75"
+  hsts:                     "true"
+  hsts-max-age:             "31536000"
+  hsts-include-subdomains:  "true"
+  ssl-protocols:            "TLSv1.2 TLSv1.3"
+  ssl-ciphers:              "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
+
+---
+# ============================================================
+# Ingress — AXIOM API (api.axiomestimate.com)
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: axiom-api-ingress
+  namespace: axiom
+  annotations:
+    kubernetes.io/ingress.class:                   "nginx"
+    cert-manager.io/cluster-issuer:                "letsencrypt-production"
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header X-Frame-Options           "DENY" always;
+      add_header X-Content-Type-Options    "nosniff" always;
+      add_header X-XSS-Protection          "1; mode=block" always;
+      add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
+      add_header Permissions-Policy        "camera=(), microphone=(), geolocation=()" always;
+      add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    # Rate limiting — per IP, per minute
+    nginx.ingress.kubernetes.io/limit-connections:       "20"
+    nginx.ingress.kubernetes.io/limit-rps:               "30"
+    nginx.ingress.kubernetes.io/limit-rpm:               "300"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier:  "3"
+    # CORS for portal frontend
+    nginx.ingress.kubernetes.io/enable-cors:             "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin:       "https://app.axiomestimate.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods:      "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers:      "Authorization, Content-Type, X-Request-ID"
+    # Stripe webhook endpoint bypasses rate limit (high-frequency legitimate traffic)
+    nginx.ingress.kubernetes.io/server-snippet: |
+      location /api/v1/webhooks/stripe {
+        limit_req off;
+        proxy_pass http://axiom-api:8000;
+      }
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.axiomestimate.com
+      secretName: axiom-api-tls
+  rules:
+    - host: api.axiomestimate.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: axiom-api
+                port:
+                  number: 8000
+
+---
+# ============================================================
+# Ingress — Flower monitoring UI (internal VPN only)
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: axiom-flower-ingress
+  namespace: axiom
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-production"
+    # Restrict to internal VPN CIDR — replace with your VPN egress IP
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12"
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: axiom-flower-basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "AXIOM Internal — Authorized Only"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - flower.axiomestimate.com
+      secretName: axiom-flower-tls
+  rules:
+    - host: flower.axiomestimate.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: axiom-flower
+                port:
+                  number: 5555
+
+---
+# ============================================================
+# Flower Service
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: axiom-flower
+  namespace: axiom
+spec:
+  type: ClusterIP
+  selector:
+    app: axiom-watchdog     # Flower runs in same image
+  ports:
+    - port: 5555
+      targetPort: 5555
+
+---
+# ============================================================
+# NetworkPolicy — deny all ingress except from ingress controller
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: axiom-api-netpol
+  namespace: axiom
+spec:
+  podSelector:
+    matchLabels:
+      app: axiom-api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 9090
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: axiom
+      ports:
+        - protocol: TCP
+          port: 5432    # postgres
+        - protocol: TCP
+          port: 6379    # redis
+        - protocol: TCP
+          port: 9000    # minio
+        - protocol: TCP
+          port: 6333    # qdrant
+    - to:
+        - namespaceSelector: {}   # external HTTPS (Stripe, OpenAI, MOTOR API, FL DMV)
+      ports:
+        - protocol: TCP
+          port: 443
+
+---
+# NetworkPolicy — workers only talk to redis, postgres, minio, qdrant
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: axiom-worker-netpol
+  namespace: axiom
+spec:
+  podSelector:
+    matchLabels:
+      app: axiom-worker
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []     # no direct inbound connections to workers
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: axiom
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 9000
+        - protocol: TCP
+          port: 6333
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443

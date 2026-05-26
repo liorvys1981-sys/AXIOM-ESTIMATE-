@@ -1,0 +1,78 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2869
+\cocoatextscaling1\cocoaplatform1{\fonttbl\f0\fnil\fcharset0 .SFUI-Regular;\f1\fnil\fcharset0 .SFUI-Semibold;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;\red0\green0\blue0;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;\cssrgb\c0\c0\c0\c54000;}
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl223\slmult1\sb782\pardirnatural\partightenfactor0
+
+\f0\fs48 \cf2 Los 3 Pasos Finales (Fuera de la IA)\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl230\slmult1\sb347\pardirnatural\partightenfactor0
+
+\fs40 \cf2 1. El Intercambio de Llaves en el 
+\fs30 \cf3 \kerning1\expnd24\expndtw120
+\uc0\u8288 \cf3 \kerning1\expnd0\expndtw0 .env\cf3 \kerning1\expnd24\expndtw120
+\uc0\u8288 
+\fs40 \cf2 \kerning1\expnd0\expndtw0  (Modo Live)\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl270\slmult1\sb141\pardirnatural\partightenfactor0
+
+\fs34 \cf2 Ahora mismo tu c\'f3digo est\'e1 configurado en modo de prueba (Sandbox). Tienes que entrar a tu cuenta de Stripe y a tu proveedor de LLM para cambiar las credenciales temporales por las de producci\'f3n:\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\li800\fi-800\sl270\slmult1\sb265\pardirnatural\partightenfactor0
+\cf2  Cambia tu 
+\fs30 \cf3 \kerning1\expnd24\expndtw120
+\uc0\u8288 \kerning1\expnd0\expndtw0 STRIPE_SECRET_KEY\kerning1\expnd24\expndtw120
+\uc0\u8288 
+\fs34 \cf2 \kerning1\expnd0\expndtw0  (la que empieza por 
+\fs30 \cf3 \kerning1\expnd24\expndtw120
+\uc0\u8288 \kerning1\expnd0\expndtw0 sk_test_\kerning1\expnd24\expndtw120
+\uc0\u8288 
+\fs34 \cf2 \kerning1\expnd0\expndtw0 ) por tu llave real de producci\'f3n (
+\fs30 \cf3 \kerning1\expnd24\expndtw120
+\uc0\u8288 \kerning1\expnd0\expndtw0 sk_live_\kerning1\expnd24\expndtw120
+\uc0\u8288 
+\fs34 \cf2 \kerning1\expnd0\expndtw0 ).\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\li800\fi-800\sl270\slmult1\sb185\pardirnatural\partightenfactor0
+\cf2  Aseg\'farate de que la 
+\fs30 \cf3 \kerning1\expnd24\expndtw120
+\uc0\u8288 \kerning1\expnd0\expndtw0 OPENAI_API_KEY\kerning1\expnd24\expndtw120
+\uc0\u8288 
+\fs34 \cf2 \kerning1\expnd0\expndtw0  o 
+\fs30 \cf3 \kerning1\expnd24\expndtw120
+\uc0\u8288 \kerning1\expnd0\expndtw0 ANTHROPIC_API_KEY\kerning1\expnd24\expndtw120
+\uc0\u8288 
+\fs34 \cf2 \kerning1\expnd0\expndtw0  tenga fondos cargados para que los agentes no se queden sin saldo a mitad de una auditor\'eda.\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl230\slmult1\sb778\pardirnatural\partightenfactor0
+
+\fs40 \cf2 2. El Despliegue en el Servidor (Hosting)\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl270\slmult1\sb141\pardirnatural\partightenfactor0
+
+\fs34 \cf2 El c\'f3digo necesita vivir en internet. Como la arquitectura usa Docker, tienes que subir tus contenedores a un servidor en la nube. Las mejores opciones para este tipo de arquitectura con Workers y GPU son:\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\li800\fi-800\sl270\slmult1\sb265\pardirnatural\partightenfactor0
+\cf2  
+\f1\b DigitalOcean o Linode:
+\f0\b0  Excelentes para levantar el contenedor de Docker con Redis y Celery r\'e1pido.\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\li800\fi-800\sl270\slmult1\sb185\pardirnatural\partightenfactor0
+\cf2  
+\f1\b Vast.ai o RunPod:
+\f0\b0  Si necesitas alquilar GPUs f\'edsicas baratas por hora para activar la telemetr\'eda pesada y el procesamiento en paralelo.\
+ 
+\f1\b Vercel o Netlify:
+\f0\b0  Para subir el archivo frontend 
+\fs30 \cf3 \kerning1\expnd24\expndtw120
+\uc0\u8288 \kerning1\expnd0\expndtw0 index.html\kerning1\expnd24\expndtw120
+\uc0\u8288 
+\fs34 \cf2 \kerning1\expnd0\expndtw0  de forma gratuita y que cargue a la velocidad del rayo.\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl230\slmult1\sb778\pardirnatural\partightenfactor0
+
+\fs40 \cf2 3. Configurar el Webhook de Stripe\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl270\slmult1\sb141\pardirnatural\partightenfactor0
+
+\fs34 \cf2 Para que tu base de datos sepa de inmediato cu\'e1ndo un taller mec\'e1nico pag\'f3 los $5.46 o los $102.27, debes ir al panel de Stripe y pegar la URL de tu servidor en la secci\'f3n de Webhooks. As\'ed, cuando Stripe cobre con \'e9xito, le enviar\'e1 un "disparo" a tu backend para decirle: "\'a1Dinero recibido! Despierta al agente de Axiom Estimate y ponlo a trabajar".\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl230\slmult1\sb778\pardirnatural\partightenfactor0
+
+\fs40 \cf2 \uc0\u55357 \u56960  Conclusi\'f3n\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl270\slmult1\sb141\pardirnatural\partightenfactor0
+
+\fs34 \cf2 El PDF que tienes 
+\f1\b deja el software al 100% de su construcci\'f3n
+\f0\b0 . Lo \'fanico que te separa de facturar despu\'e9s de que Claude te entregue el c\'f3digo es meter las llaves reales, subirlo a internet y prender los motores.\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl270\slmult1\sb265\pardirnatural\partightenfactor0
+\cf2 \'a1Est\'e1s a nada de la meta. Env\'edaselo a Claude y que te entregue el arsenal completo de c\'f3digo! \'bfTienes ya listo el servidor donde vas a montar los contenedores?}

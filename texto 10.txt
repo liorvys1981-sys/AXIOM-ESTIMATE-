@@ -1,0 +1,49 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: axiom-config
+  namespace: axiom
+data:
+  ENVIRONMENT:          "production"
+  LOG_LEVEL:            "info"
+  CELERY_APP:           "axiom.agent_core"
+  CELERY_CONCURRENCY:   "4"
+  CELERY_LOGLEVEL:      "info"
+  CELERY_QUEUES:        "celery,estimate,claims,total_loss,lien,audit,cpo,gpu_resell"
+
+  # Watchdog thresholds
+  WATCHDOG_POLL_SECS:            "15"
+  MEMORY_WARN_PCT:               "75"
+  MEMORY_CRITICAL_PCT:           "90"
+  QUEUE_DEPTH_WARN:              "50"
+  QUEUE_DEPTH_CRITICAL:          "200"
+  MAX_RESTART_ATTEMPTS:          "5"
+  STALE_WORKER_THRESHOLD_SECS:   "300"
+
+  # Florida jurisdiction defaults
+  FL_TOTAL_LOSS_THRESHOLD:       "0.75"
+  FL_DMV_API_BASE:               "https://services.flhsmv.gov/api"
+  FL_DEFAULT_LABOR_RATE:         "62.00"
+
+  # MOTOR API settings
+  MOTOR_TIMEOUT_SECS:            "10"
+  MOTOR_CACHE_TTL_SECS:          "86400"
+
+  # CIECA BMS output version
+  CIECA_BMS_VERSION:             "2026.1"
+  CIECA_TRANSACTION_TYPE:        "EstimateSubmission"
+
+  # Vision pipeline
+  VISION_MODEL:                  "gpt-4o"
+  VISION_MAX_IMAGES:             "12"
+  VISION_MAX_IMAGE_MB:           "25"
+
+  # Qdrant collection names
+  QDRANT_COLLECTION_ESTIMATES:   "estimate_vectors"
+  QDRANT_COLLECTION_PARTS:       "parts_catalog_vectors"
+  QDRANT_VECTOR_SIZE:            "1536"
+
+  # Prometheus metrics path
+  METRICS_PATH:                  "/metrics"
+  METRICS_PORT:                  "9090"
